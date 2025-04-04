@@ -1,0 +1,37 @@
+{
+  "id": "superia-x-tra-400",
+  "name": "Fuji Superia X-tra 400",
+  "description": "Versatile consumer color negative film with good color rendition",
+  "category": "Color Negative",
+  "thumbnail": "thumbnails/superiaxtra400.jpg",
+  "parameters": {
+    "colorMatrix": [
+      [1.08, -0.05, -0.03],
+      [-0.05, 1.10, -0.05],
+      [-0.03, -0.05, 1.08]
+    ],
+    "toneCurve": {
+      "red": [[0, 10], [64, 65], [128, 130], [192, 200], [255, 255]],
+      "green": [[0, 10], [64, 65], [128, 130], [192, 200], [255, 255]],
+      "blue": [[0, 10], [64, 65], [128, 130], [192, 200], [255, 255]]
+    },
+    "grainParams": {
+      "intensity": 25,
+      "size": 1.0,
+      "roughness": 0.7
+    },
+    "colorBalance": {
+      "redShift": 2,
+      "greenShift": 3,
+      "blueShift": 5,
+      "redBalance": 1.02,
+      "greenBalance": 1.03,
+      "blueBalance": 1.05
+    },
+    "dynamicRange": {
+      "compression": 0.85,
+      "shadowPreservation": 0.5,
+      "highlightRolloff": 0.7
+    }
+  }
+}
