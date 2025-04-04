@@ -47,7 +47,7 @@ pip install cupy-cudaXXX
 Navigate to the project's root directory and run:
 
 ```bash
-python main.py
+python -m negative_converter.main
 ```
 
 ## 2. Getting Started
