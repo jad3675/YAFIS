@@ -44,7 +44,7 @@ The Negative-to-Positive Converter is a powerful Python application designed for
 
 ```bash
 git clone https://github.com/jad3675/negative_2_positive.git
-cd negative-converter
+cd negative_2_positive
 ```
 
 ### 2. Install Dependencies
