@@ -43,7 +43,7 @@ The Negative-to-Positive Converter is a powerful Python application designed for
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/jad3675/negative_2_positive.git
+git clone https://github.com/jad3675/YAFIS.git
 cd negative_2_positive
 ```
 
