@@ -50,7 +50,7 @@ cd negative_2_positive
 ### 2. Install Dependencies
 
 ```bash
-pip install PyQt6 numpy opencv-python opencv-contrib-python appdirs
+pip install PyQt6 numpy opencv-python opencv-contrib-python appdirs pillow
 ```
 
 For GPU acceleration (optional, NVIDIA GPU required):
