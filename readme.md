@@ -108,12 +108,8 @@ negative_converter/
 
 ## License
 
-[Specify license here, e.g., MIT, GPL, etc.]
+MIT
 
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
-
-## Acknowledgements
-
-[Add credits, inspiration, etc. as appropriate]
