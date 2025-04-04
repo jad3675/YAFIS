@@ -88,7 +88,7 @@ pip install cupy-cudaXXX
 ## Documentation
 
 - [How-to Guide](how-to-use.md): Detailed usage instructions for all features
-- [Technical Details](technical.md): In-depth explanation of the processing pipeline and architecture
+- [Technical Details](technical_theory.md): In-depth explanation of the processing pipeline and architecture
 
 ## Directory Structure
 
