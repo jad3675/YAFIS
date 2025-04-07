@@ -28,24 +28,33 @@ def load_image(file_path):
         file_path (str): The path to the image file.
 
     Returns:
-        numpy.ndarray: The loaded image in RGB format (uint8), correctly oriented,
-                       or None if loading fails or file not found.
+        tuple: A tuple containing:
+               - numpy.ndarray: The loaded image in RGB format (uint8), correctly oriented.
+               - str: The original image mode (e.g., 'RGB', 'L', 'RGBA').
+               - int: The file size in bytes.
+               Returns (None, None, None) if loading fails or file not found.
     """
     if not PILLOW_AVAILABLE:
         print("[Image Loader Error] Cannot load image: Pillow library is not available.")
-        return None
+        return None, None, None
 
     if not isinstance(file_path, str) or not file_path:
         print("[Image Loader Error] Invalid file path provided.")
-        return None
+        return None, None, None
 
     if not os.path.isfile(file_path):
         print(f"[Image Loader Error] File not found at '{file_path}'")
-        return None
+        return None, None, None
 
     try:
+        # Get file size first
+        file_size = os.path.getsize(file_path)
+
         # Open image using Pillow
         img = Image.open(file_path)
+
+        # Store original mode *before* potential conversion
+        original_mode = img.mode
 
         # --- Orientation Handling ---
         # Apply EXIF orientation using ImageOps.exif_transpose
@@ -84,7 +93,7 @@ def load_image(file_path):
              img.close()
              img_oriented.close()
              if img_rgb is not img_oriented: img_rgb.close()
-             return None
+             return None, None, None
 
         print(f"Successfully loaded and oriented image: '{file_path}'")
 
@@ -95,15 +104,15 @@ def load_image(file_path):
         if img_rgb is not img_oriented: img_rgb.close()
 
 
-        return image_np
+        return image_np, original_mode, file_size
 
     except UnidentifiedImageError:
         print(f"Error: Pillow could not identify image file format or file is corrupted: '{file_path}'")
-        return None
+        return None, None, None
     except FileNotFoundError:
         # Should be caught by os.path.isfile, but handle defensively
         print(f"Error: File not found (exception): '{file_path}'")
-        return None
+        return None, None, None
     except Exception as e:
         # Catch any other unexpected errors during loading or conversion
         print(f"Error loading image '{file_path}' with Pillow: {e}")
@@ -114,7 +123,7 @@ def load_image(file_path):
             if 'img_rgb' in locals() and hasattr(img_rgb, 'close') and img_rgb is not img_oriented: img_rgb.close()
         except Exception as close_e:
             print(f"Error closing image file during exception handling: {close_e}")
-        return None
+        return None, None, None
 
 # TODO: Add support for RAW files using rawpy if needed (requires rawpy library)
 # Example structure:

@@ -1,25 +1,21 @@
 import numpy as np
 import cv2
 
-# Try importing CuPy, but don't fail if it's not there
-try:
-    import cupy as cp
-    # Check if CUDA is available and a device is accessible
-    try:
-        cp.cuda.runtime.getDeviceCount()
-        _GPU_ENABLED_UTIL = True
-    except cp.cuda.runtime.CUDARuntimeError:
-        _GPU_ENABLED_UTIL = False
-except ImportError:
-    cp = None # Define cp as None if import fails
-    _GPU_ENABLED_UTIL = False
+# Use centralized GPU detection and logger
+# Imports from within the same package can be relative
+from .gpu import GPU_ENABLED, xp, cp_module
+from .logger import get_logger
+# No changes needed here, imports are already correct relative to utils
+
+logger = get_logger(__name__)
+cp = cp_module # Assign cp_module to cp for compatibility if needed locally, or just use xp
 
 def apply_curve(image_channel, curve_points):
     """
     Applies a tone curve defined by points to a single image channel.
 
-    Handles both uint8 (NumPy only, using cv2.LUT) and float32 (NumPy/CuPy, using interpolation).
-    Assumes input uint8 arrays are NumPy arrays.
+    Handles both uint8 (using cv2.LUT or interpolation) and float32 (using interpolation).
+    Note: If input is uint8 CuPy array, it's converted to NumPy for cv2.LUT and a NumPy array is returned.
 
     Args:
         image_channel: NumPy or CuPy array representing a single image channel.
@@ -33,23 +29,23 @@ def apply_curve(image_channel, curve_points):
         if the input channel is empty, or if the dtype is unsupported.
     """
     if image_channel is None or image_channel.size == 0:
-        print("[apply_curve Warning] Input channel is empty.")
+        logger.warning("Input channel is empty.")
         return image_channel
 
     # Determine backend (xp) and if input is CuPy array
-    is_cupy_input = cp and isinstance(image_channel, cp.ndarray)
-    xp = cp if is_cupy_input else np
+    # xp is imported from utils.gpu, check if input matches the GPU backend
+    is_cupy_input = GPU_ENABLED and xp.get_array_module(image_channel) == xp
 
     # Validate and prepare curve points (using NumPy for simplicity as points array is small)
     if curve_points is None:
-        print("[apply_curve Warning] curve_points is None. Returning original channel.")
+        logger.warning("curve_points is None. Returning original channel.")
         return image_channel
     try:
         points_np = np.array(sorted(curve_points))
         if points_np.ndim != 2 or points_np.shape[1] != 2 or points_np.shape[0] == 0:
             raise ValueError("Invalid shape or empty.")
     except Exception as e:
-        print(f"[apply_curve Warning] Invalid curve_points: {e}. Returning original channel.")
+        logger.warning(f"Invalid curve_points: {e}. Returning original channel.")
         return image_channel
 
     # Ensure curve spans 0-255
@@ -75,10 +71,11 @@ def apply_curve(image_channel, curve_points):
     if image_channel.dtype == np.uint8:
         if is_cupy_input:
             # cv2.LUT requires NumPy array. Convert CuPy uint8 input to NumPy.
-            print("[apply_curve Warning] uint8 input was CuPy array, converting to NumPy for cv2.LUT.")
-            image_channel_np = cp.asnumpy(image_channel)
+            logger.warning("uint8 input was CuPy array, converting to NumPy for cv2.LUT.")
+            image_channel_np = xp.asnumpy(image_channel) # Use xp.asnumpy
             # Convert float LUT (which might be CuPy array) to NumPy uint8
-            lut_uint8 = xp.asnumpy(lut_y_float).astype(np.uint8) if is_cupy_input else lut_y_float.astype(np.uint8)
+            # lut_y_float is already on GPU (xp is cupy), convert to NumPy uint8
+            lut_uint8 = xp.asnumpy(lut_y_float).astype(np.uint8)
             result = cv2.LUT(image_channel_np, lut_uint8)
             # Convert result back to CuPy? Or decide utility always returns NumPy for uint8?
             # For now, let's return NumPy for uint8 input, consistent with cv2.LUT output.
@@ -98,5 +95,5 @@ def apply_curve(image_channel, curve_points):
         return result_float
 
     else:
-        print(f"[apply_curve Warning] Unsupported input dtype: {image_channel.dtype}. Returning original channel.")
+        logger.warning(f"Unsupported input dtype: {image_channel.dtype}. Returning original channel.")
         return image_channel

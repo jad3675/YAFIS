@@ -37,6 +37,9 @@ class AdjustmentPanel(QWidget):
             'mixer_green_r': 0, 'mixer_green_g': 100, 'mixer_green_b': 0, 'mixer_green_const': 0,
             'mixer_blue_r': 0, 'mixer_blue_g': 0, 'mixer_blue_b': 100, 'mixer_blue_const': 0,
             'noise_reduction_strength': 0,
+            'dust_removal_enabled': False,
+            'dust_removal_sensitivity': 50, # Default sensitivity (higher = more sensitive)
+            'dust_removal_radius': 3,      # Default inpainting radius
             'hsl_color': 'Reds', # This itself isn't an adjustment value to compare
             'hsl_reds_h': 0, 'hsl_reds_s': 0, 'hsl_reds_l': 0,
             'hsl_yellows_h': 0, 'hsl_yellows_s': 0, 'hsl_yellows_l': 0,
@@ -77,6 +80,7 @@ class AdjustmentPanel(QWidget):
                 'mixer_blue_r', 'mixer_blue_g', 'mixer_blue_b', 'mixer_blue_const'
             ],
             'nr': ['noise_reduction_strength'],
+            'dust_removal': ['dust_removal_enabled', 'dust_removal_sensitivity', 'dust_removal_radius'],
             'hsl': [
                 'hsl_reds_h', 'hsl_reds_s', 'hsl_reds_l',
                 'hsl_yellows_h', 'hsl_yellows_s', 'hsl_yellows_l',
@@ -354,6 +358,32 @@ class AdjustmentPanel(QWidget):
         nr_group_layout_outer = QVBoxLayout(nr_group); nr_group_layout_outer.setContentsMargins(0, 15, 0, 0); nr_group_layout_outer.addWidget(nr_content_widget)
         nr_group.toggled.connect(nr_content_widget.setVisible); nr_content_widget.setVisible(False)
         main_layout.addWidget(nr_group)
+
+        # --- Dust Removal Group ---
+        dust_group = QGroupBox("Dust Removal")
+        self.group_boxes['dust_removal'] = dust_group # Store reference
+        self.original_group_titles['dust_removal'] = dust_group.title() # Store original title
+        dust_group.setCheckable(True); dust_group.setChecked(False) # Default disabled
+        dust_content_widget = QWidget(); dust_layout = QFormLayout(dust_content_widget)
+        dust_layout.setContentsMargins(10, 5, 10, 10); dust_layout.setSpacing(10)
+
+        # Enable Checkbox (handled by group box checkable)
+        dust_group.toggled.connect(self._on_dust_removal_enabled_change)
+
+        # Sensitivity Slider
+        self.dust_sensitivity_slider = self._create_slider(1, 100, self._default_adjustments['dust_removal_sensitivity'], self._on_dust_removal_sensitivity_change)
+        self.dust_sensitivity_label = QLabel(str(self._default_adjustments['dust_removal_sensitivity']))
+        dust_layout.addRow("Sensitivity:", self._create_slider_layout(self.dust_sensitivity_slider, self.dust_sensitivity_label))
+
+        # Radius Slider
+        self.dust_radius_slider = self._create_slider(1, 10, self._default_adjustments['dust_removal_radius'], self._on_dust_removal_radius_change) # Radius 1-10 pixels
+        self.dust_radius_label = QLabel(str(self._default_adjustments['dust_removal_radius']))
+        dust_layout.addRow("Radius (px):", self._create_slider_layout(self.dust_radius_slider, self.dust_radius_label))
+
+        dust_group_layout_outer = QVBoxLayout(dust_group); dust_group_layout_outer.setContentsMargins(0, 15, 0, 0); dust_group_layout_outer.addWidget(dust_content_widget)
+        dust_group.toggled.connect(dust_content_widget.setVisible); dust_content_widget.setVisible(False) # Content hidden when group unchecked
+        main_layout.addWidget(dust_group)
+        # --- End Dust Removal Group ---
 
         # --- HSL Adjustments Group ---
         hsl_group = QGroupBox("HSL / Color")
@@ -641,6 +671,26 @@ class AdjustmentPanel(QWidget):
         # self._current_adjustments['sel_relative'] = self.sel_relative_checkbox.isChecked()
         self.adjustment_changed.emit(self._current_adjustments)
         self._check_and_update_group_title('selective_color')
+    # --- Signal Handlers for Dust Removal ---
+    def _on_dust_removal_enabled_change(self, checked):
+        self._push_state_to_undo_stack()
+        self._current_adjustments['dust_removal_enabled'] = checked
+        self.adjustment_changed.emit(self._current_adjustments)
+        self._check_and_update_group_title('dust_removal')
+
+    def _on_dust_removal_sensitivity_change(self, value):
+        self._push_state_to_undo_stack()
+        self.dust_sensitivity_label.setText(str(value))
+        self._current_adjustments['dust_removal_sensitivity'] = value
+        self.adjustment_changed.emit(self._current_adjustments)
+        self._check_and_update_group_title('dust_removal')
+
+    def _on_dust_removal_radius_change(self, value):
+        self._push_state_to_undo_stack()
+        self.dust_radius_label.setText(str(value))
+        self._current_adjustments['dust_removal_radius'] = value
+        self.adjustment_changed.emit(self._current_adjustments)
+        self._check_and_update_group_title('dust_removal')
 
     # --- Group Title Update Logic ---
     def _check_and_update_group_title(self, group_key):
@@ -784,7 +834,18 @@ class AdjustmentPanel(QWidget):
         self.mixer_channel_combo.blockSignals(True); self.mixer_channel_combo.setCurrentText(self._current_adjustments['mixer_out_channel']); self.mixer_channel_combo.blockSignals(False)
         self._update_mixer_sliders() # Updates sliders based on the new channel and values
         # Noise Reduction
-        self.noise_reduction_strength_slider.blockSignals(True); self.noise_reduction_strength_slider.setValue(self._current_adjustments['noise_reduction_strength']); self.noise_reduction_strength_label.setText(str(self._current_adjustments['noise_reduction_strength'])); self.noise_reduction_strength_slider.blockSignals(False)
+        # Noise Reduction
+        nr_strength = self._current_adjustments['noise_reduction_strength']
+        self.noise_reduction_strength_slider.blockSignals(True); self.noise_reduction_strength_slider.setValue(nr_strength); self.noise_reduction_strength_label.setText(str(nr_strength)); self.noise_reduction_strength_slider.blockSignals(False)
+        self.group_boxes['nr'].setChecked(nr_strength != self._default_adjustments['noise_reduction_strength'])
+
+        # Dust Removal
+        dust_enabled = self._current_adjustments.get('dust_removal_enabled', self._default_adjustments['dust_removal_enabled'])
+        dust_sensitivity = self._current_adjustments.get('dust_removal_sensitivity', self._default_adjustments['dust_removal_sensitivity'])
+        dust_radius = self._current_adjustments.get('dust_removal_radius', self._default_adjustments['dust_removal_radius'])
+        self.group_boxes['dust_removal'].blockSignals(True); self.group_boxes['dust_removal'].setChecked(dust_enabled); self.group_boxes['dust_removal'].blockSignals(False) # Block signals for group checkbox
+        self.dust_sensitivity_slider.blockSignals(True); self.dust_sensitivity_slider.setValue(dust_sensitivity); self.dust_sensitivity_label.setText(str(dust_sensitivity)); self.dust_sensitivity_slider.blockSignals(False)
+        self.dust_radius_slider.blockSignals(True); self.dust_radius_slider.setValue(dust_radius); self.dust_radius_label.setText(str(dust_radius)); self.dust_radius_slider.blockSignals(False)
         # HSL
         self.hsl_color_combo.blockSignals(True); self.hsl_color_combo.setCurrentText(self._current_adjustments['hsl_color']); self.hsl_color_combo.blockSignals(False)
         self._update_hsl_sliders() # Updates sliders based on the new color and values

@@ -17,25 +17,16 @@ from .image_viewer import ImageViewer
 from .adjustment_panel import AdjustmentPanel
 from .preset_panel import FilmPresetPanel
 from .photo_preset_panel import PhotoPresetPanel
+from .histogram_widget import HistogramWidget # Import Histogram
 from .filmstrip_widget import BatchFilmstripWidget # Import Filmstrip
 
 # Import IO and Processing components
 from negative_converter.processing.adjustments import apply_all_adjustments # Import the new function using absolute path
-try:
-    # Use relative imports within the package
-    from ..io import image_loader, image_saver
-    from ..processing import NegativeConverter, FilmPresetManager, PhotoPresetManager, ImageAdjustments
-    from ..processing.adjustments import AdvancedAdjustments
-    from ..processing.batch import process_batch_with_adjustments # Import batch function
-except ImportError:
-    # Fallback for running script directly (less ideal)
-    # Adjust path based on where the script might be run from relative to the package root
-    package_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-    if package_dir not in sys.path:
-        sys.path.insert(0, package_dir)
-    from negative_converter.io import image_loader, image_saver
-    from negative_converter.processing import NegativeConverter, FilmPresetManager, PhotoPresetManager, ImageAdjustments, AdvancedAdjustments
-    from negative_converter.processing.batch import process_batch_with_adjustments
+# Standard imports assuming package structure is respected
+from ..io import image_loader, image_saver
+from ..processing import NegativeConverter, FilmPresetManager, PhotoPresetManager, ImageAdjustments
+from ..processing.adjustments import AdvancedAdjustments
+from ..processing.batch import process_batch_with_adjustments
 
 
 # --- Worker Class for Background Processing ---
@@ -70,25 +61,40 @@ class ImageProcessingWorker(QObject):
 
 # --- Worker for Initial Negative Conversion ---
 class InitialConversionWorker(QObject):
-    finished = pyqtSignal(object) # Emits converted positive image (numpy array)
-    error = pyqtSignal(str)       # Emits error message
+    finished = pyqtSignal(object, str) # Emits (converted_image, mask_classification)
+    progress = pyqtSignal(int, int) # Emits (current_step, total_steps)
+    error = pyqtSignal(str)         # Emits error message
+    # Signal to request conversion with optional override - THIS WAS ALREADY ADDED, KEEPING
+    conversion_requested = pyqtSignal(object, object) # raw_image, override_type (object allows None)
 
     def __init__(self, conversion_func):
         super().__init__()
         self.conversion_func = conversion_func # Should be MainWindow._run_initial_conversion
         self._is_running = False
 
-    @pyqtSlot(object) # Takes the raw loaded image
-    def run(self, raw_image):
+    # Slot now takes raw_image and optional override_type
+    # Slot signature already updated, KEEPING
+    @pyqtSlot(object, object)
+    def run(self, raw_image, override_type=None):
         """Calls the initial conversion function."""
         if self._is_running:
             return
         self._is_running = True
         try:
-            converted_image = self.conversion_func(raw_image)
-            if converted_image is None:
-                raise ValueError("Initial conversion function returned None.")
-            self.finished.emit(converted_image)
+            # Define the callback function to emit the progress signal
+            def progress_callback(step, total):
+                self.progress.emit(step, total)
+
+            # Pass the callback to the conversion function, which now returns (image, classification)
+            # Pass override_type to the backend conversion function - THIS WAS ALREADY ADDED, KEEPING
+            result_tuple = self.conversion_func(raw_image,
+                                                progress_callback=progress_callback,
+                                                override_mask_classification=override_type)
+            if result_tuple is None or result_tuple[0] is None:
+                 # Handle case where conversion returns None or (None, classification)
+                 raise ValueError("Initial conversion function failed or returned None image.")
+            converted_image, mask_classification = result_tuple
+            self.finished.emit(converted_image, mask_classification) # Emit both results
         except Exception as e:
             import traceback
             print(f"Error during initial conversion call: {e}")
@@ -168,8 +174,10 @@ class MainWindow(QMainWindow):
     # Signal to request processing in the worker thread
     processing_requested = pyqtSignal(object, dict)
     # Signals for initial conversion worker
-    initial_conversion_requested = pyqtSignal(object)
-    initial_conversion_finished = pyqtSignal(object) # Emits converted positive
+    # Use the new signal with override parameter
+    # Signal definition already updated, KEEPING
+    initial_conversion_requested = pyqtSignal(object, object) # raw_image, override_type
+    initial_conversion_finished = pyqtSignal(object, str) # Emits (converted_image, mask_classification)
     initial_conversion_error = pyqtSignal(str)
 
 
@@ -178,7 +186,13 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Negative-to-Positive Converter")
         self.setGeometry(100, 100, 1200, 800)
 
+        # --- Status Info ---
+        self._current_file_size = None
+        self._current_original_mode = None
+        self._current_negative_type = None
+
         # --- Image Data ---
+        self.raw_loaded_image = None # Store the original loaded image before conversion
         self.initial_converted_image = None
         self.base_image = None
         self._is_converting_initial = False # Flag for initial conversion status
@@ -203,9 +217,12 @@ class MainWindow(QMainWindow):
         # Pass the actual conversion method of the instance
         self.initial_conversion_worker = InitialConversionWorker(self.negative_converter.convert)
         self.initial_conversion_worker.moveToThread(self.initial_conversion_thread)
+        # Connect the new signal to the worker's run slot
+        # Connection already updated, KEEPING
         self.initial_conversion_requested.connect(self.initial_conversion_worker.run)
-        self.initial_conversion_worker.finished.connect(self._handle_initial_conversion_finished) # Connect to new slot
-        self.initial_conversion_worker.error.connect(self._handle_initial_conversion_error)       # Connect to new slot
+        self.initial_conversion_worker.finished.connect(self._handle_initial_conversion_finished)
+        self.initial_conversion_worker.progress.connect(self._handle_initial_conversion_progress) # Connect progress signal
+        self.initial_conversion_worker.error.connect(self._handle_initial_conversion_error)
         self.initial_conversion_thread.start()
 
         self.processing_worker = ImageProcessingWorker(self._get_fully_adjusted_image)
@@ -249,6 +266,7 @@ class MainWindow(QMainWindow):
         # Connect WB Picker signals
         self.adjustment_panel.wb_picker_requested.connect(self.handle_wb_picker_request)
         self.image_viewer.color_sampled.connect(self.handle_color_sampled)
+        self.image_viewer.display_mode_changed.connect(self._update_status_view_mode) # Connect new signal
 
         self.update_ui_state()
 
@@ -287,9 +305,18 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.filmstrip_dock)
         self.filmstrip_dock.setVisible(False) # Start hidden
 
-        # Tabify docks
+        # Histogram Panel Dock
+        self.histogram_dock = QDockWidget("Histogram", self)
+        self.histogram_dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea | Qt.DockWidgetArea.BottomDockWidgetArea)
+        self.histogram_widget = HistogramWidget(self.histogram_dock)
+        self.histogram_dock.setWidget(self.histogram_widget)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.histogram_dock)
+        self.histogram_dock.setVisible(True) # Start visible
+
+        # Tabify right-side docks
         self.tabifyDockWidget(self.adjustment_dock, self.film_preset_dock)
         self.tabifyDockWidget(self.film_preset_dock, self.photo_preset_dock)
+        self.tabifyDockWidget(self.photo_preset_dock, self.histogram_dock) # Add histogram to tabs
         self.adjustment_dock.raise_()
 
     def create_actions(self):
@@ -301,21 +328,118 @@ class MainWindow(QMainWindow):
 
         # Undo Action
         self.undo_action = QAction("&Undo", self, statusTip="Undo the last destructive operation", shortcut=QKeySequence.StandardKey.Undo, triggered=self.undo_last_destructive_op, enabled=False)
+        self.compare_action = QAction("&Compare Before/After", self, statusTip="Toggle between original and adjusted view", checkable=True, triggered=self.toggle_compare_view, enabled=False)
 
-        self.view_adjust_action = self.adjustment_dock.toggleViewAction(); self.view_adjust_action.setText("Adjustment Panel"); self.view_adjust_action.setStatusTip("Show/Hide the Adjustment Panel")
-        self.view_film_preset_action = self.film_preset_dock.toggleViewAction(); self.view_film_preset_action.setText("Film Simulation Panel"); self.view_film_preset_action.setStatusTip("Show/Hide the Film Simulation Panel")
-        self.view_photo_preset_action = self.photo_preset_dock.toggleViewAction(); self.view_photo_preset_action.setText("Photo Style Panel"); self.view_photo_preset_action.setStatusTip("Show/Hide the Photo Style Panel")
-        self.view_filmstrip_action = self.filmstrip_dock.toggleViewAction(); self.view_filmstrip_action.setText("Batch Filmstrip"); self.view_filmstrip_action.setStatusTip("Show/Hide the Batch Filmstrip Panel")
+        self.view_adjust_action = self.adjustment_dock.toggleViewAction()
+        self.view_adjust_action.setText("Adjustment Panel")
+        self.view_adjust_action.setStatusTip("Show/Hide the Adjustment Panel")
+        self.view_film_preset_action = self.film_preset_dock.toggleViewAction()
+        self.view_film_preset_action.setText("Film Simulation Panel")
+        self.view_film_preset_action.setStatusTip("Show/Hide the Film Simulation Panel")
+        self.view_photo_preset_action = self.photo_preset_dock.toggleViewAction()
+        self.view_photo_preset_action.setText("Photo Style Panel")
+        self.view_photo_preset_action.setStatusTip("Show/Hide the Photo Style Panel")
+        self.view_filmstrip_action = self.filmstrip_dock.toggleViewAction()
+        self.view_filmstrip_action.setText("Batch Filmstrip")
+        self.view_filmstrip_action.setStatusTip("Show/Hide the Batch Filmstrip Panel")
+        self.view_histogram_action = self.histogram_dock.toggleViewAction()
+        self.view_histogram_action.setText("Histogram Panel")
+        self.view_histogram_action.setStatusTip("Show/Hide the Histogram Panel")
 
     def create_menus(self):
         """Create the main menu bar."""
         menu_bar = self.menuBar()
-        file_menu = menu_bar.addMenu("&File"); file_menu.addAction(self.open_action); file_menu.addAction(self.open_batch_action); file_menu.addAction(self.save_as_action); file_menu.addSeparator(); file_menu.addAction(self.exit_action)
-        edit_menu = menu_bar.addMenu("&Edit"); edit_menu.addAction(self.undo_action)
-        view_menu = menu_bar.addMenu("&View"); view_menu.addAction(self.view_adjust_action); view_menu.addAction(self.view_film_preset_action); view_menu.addAction(self.view_photo_preset_action); view_menu.addSeparator(); view_menu.addAction(self.view_filmstrip_action)
+        file_menu = menu_bar.addMenu("&File")
+        file_menu.addAction(self.open_action)
+        file_menu.addAction(self.open_batch_action)
+        file_menu.addAction(self.save_as_action)
+        file_menu.addSeparator()
+        file_menu.addAction(self.exit_action)
+
+        edit_menu = menu_bar.addMenu("&Edit")
+        edit_menu.addAction(self.undo_action)
+        edit_menu.addAction(self.compare_action) # Add compare action to Edit menu
+        # edit_menu.addAction(self.undo_action) # Remove duplicate add
+
+        view_menu = menu_bar.addMenu("&View")
+        view_menu.addAction(self.view_adjust_action)
+        view_menu.addAction(self.view_film_preset_action)
+        view_menu.addAction(self.view_photo_preset_action)
+        view_menu.addAction(self.view_histogram_action) # Add histogram view action
+        view_menu.addSeparator()
+        view_menu.addAction(self.view_filmstrip_action)
         # Toolbar view actions added in their creation methods
 
-    def create_status_bar(self): self.statusBar().showMessage("Ready")
+    def create_status_bar(self):
+        """Creates the status bar and adds permanent widgets for information."""
+        status_bar = self.statusBar()
+        status_bar.showMessage("Ready", 2000) # Show 'Ready' temporarily
+
+        # Add permanent widgets for different info pieces
+        self.status_filename_label = QLabel(" File: None ")
+        self.status_filename_label.setToolTip("Current image file path")
+        status_bar.addPermanentWidget(self.status_filename_label)
+
+        self.status_size_label = QLabel(" Size: N/A ")
+        self.status_size_label.setToolTip("Image file size")
+        status_bar.addPermanentWidget(self.status_size_label)
+
+        self.status_mode_label = QLabel(" Mode: N/A ")
+        self.status_mode_label.setToolTip("Original image color mode")
+        status_bar.addPermanentWidget(self.status_mode_label)
+
+        self.status_neg_type_label = QLabel(" Negative Type: N/A ")
+        self.status_neg_type_label.setToolTip("Detected negative base type (Click to change)")
+        self.status_neg_type_label.mousePressEvent = self._handle_neg_type_label_click # Make clickable
+        self.status_neg_type_label.setCursor(Qt.CursorShape.PointingHandCursor) # Indicate clickability
+        status_bar.addPermanentWidget(self.status_neg_type_label)
+
+        self.status_view_mode_label = QLabel(" View: After ")
+        self.status_view_mode_label.setToolTip("Current display mode (Before/After comparison)")
+        status_bar.addPermanentWidget(self.status_view_mode_label)
+
+    # --- Status Bar Update Methods ---
+
+    def _update_status_filename(self, file_path):
+        if file_path:
+            filename = os.path.basename(file_path)
+            self.status_filename_label.setText(f" File: {filename} ")
+            self.status_filename_label.setToolTip(f"File Path: {file_path}")
+        else:
+            self.status_filename_label.setText(" File: None ")
+            self.status_filename_label.setToolTip("No file loaded")
+
+    def _update_status_size(self, size_bytes):
+        if size_bytes is not None:
+            if size_bytes < 1024:
+                size_str = f"{size_bytes} B"
+            elif size_bytes < 1024 * 1024:
+                size_str = f"{size_bytes / 1024:.1f} KB"
+            else:
+                size_str = f"{size_bytes / (1024 * 1024):.1f} MB"
+            self.status_size_label.setText(f" Size: {size_str} ")
+        else:
+            self.status_size_label.setText(" Size: N/A ")
+
+    def _update_status_mode(self, mode):
+        if mode:
+            self.status_mode_label.setText(f" Mode: {mode} ")
+        else:
+            self.status_mode_label.setText(" Mode: N/A ")
+
+    def _update_status_neg_type(self, neg_type):
+        if neg_type:
+            self.status_neg_type_label.setText(f" Negative Type: {neg_type} ")
+        else:
+            self.status_neg_type_label.setText(" Negative Type: N/A ")
+
+    @pyqtSlot(str)
+    def _update_status_view_mode(self, view_mode):
+        """Slot to update the view mode label based on signal from ImageViewer."""
+        if view_mode == 'before':
+            self.status_view_mode_label.setText(" View: Before ")
+        else: # Default to 'after'
+            self.status_view_mode_label.setText(" View: After ")
     def create_toolbars(self): pass # No other toolbars currently
 
     def create_batch_toolbar(self):
@@ -390,15 +514,39 @@ class MainWindow(QMainWindow):
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.view_toolbar)
 
         # Zoom Actions
-        self.zoom_in_action = QAction("Zoom In (+)", self); self.zoom_in_action.setStatusTip("Zoom in on the image"); self.zoom_in_action.setShortcut(QKeySequence.StandardKey.ZoomIn); self.zoom_in_action.triggered.connect(self.image_viewer.zoom_in); self.zoom_in_action.setEnabled(False); self.view_toolbar.addAction(self.zoom_in_action)
-        self.zoom_out_action = QAction("Zoom Out (-)", self); self.zoom_out_action.setStatusTip("Zoom out of the image"); self.zoom_out_action.setShortcut(QKeySequence.StandardKey.ZoomOut); self.zoom_out_action.triggered.connect(self.image_viewer.zoom_out); self.zoom_out_action.setEnabled(False); self.view_toolbar.addAction(self.zoom_out_action)
-        self.reset_zoom_action = QAction("Reset Zoom (1:1)", self); self.reset_zoom_action.setStatusTip("Reset zoom to 100%"); self.reset_zoom_action.triggered.connect(self.image_viewer.reset_zoom); self.reset_zoom_action.setEnabled(False); self.view_toolbar.addAction(self.reset_zoom_action)
-        self.fit_window_action = QAction("Fit to Window", self); self.fit_window_action.setStatusTip("Zoom image to fit the window"); self.fit_window_action.triggered.connect(self.image_viewer.fit_to_window); self.fit_window_action.setEnabled(False); self.view_toolbar.addAction(self.fit_window_action)
+        self.zoom_in_action = QAction("Zoom In (+)", self)
+        self.zoom_in_action.setStatusTip("Zoom in on the image")
+        self.zoom_in_action.setShortcut(QKeySequence.StandardKey.ZoomIn)
+        self.zoom_in_action.triggered.connect(self.image_viewer.zoom_in)
+        self.zoom_in_action.setEnabled(False)
+        self.view_toolbar.addAction(self.zoom_in_action)
+
+        self.zoom_out_action = QAction("Zoom Out (-)", self)
+        self.zoom_out_action.setStatusTip("Zoom out of the image")
+        self.zoom_out_action.setShortcut(QKeySequence.StandardKey.ZoomOut)
+        self.zoom_out_action.triggered.connect(self.image_viewer.zoom_out)
+        self.zoom_out_action.setEnabled(False)
+        self.view_toolbar.addAction(self.zoom_out_action)
+
+        self.reset_zoom_action = QAction("Reset Zoom (1:1)", self)
+        self.reset_zoom_action.setStatusTip("Reset zoom to 100%")
+        self.reset_zoom_action.triggered.connect(self.image_viewer.reset_zoom)
+        self.reset_zoom_action.setEnabled(False)
+        self.view_toolbar.addAction(self.reset_zoom_action)
+
+        self.fit_window_action = QAction("Fit to Window", self)
+        self.fit_window_action.setStatusTip("Zoom image to fit the window")
+        self.fit_window_action.triggered.connect(self.image_viewer.fit_to_window)
+        self.fit_window_action.setEnabled(False)
+        self.view_toolbar.addAction(self.fit_window_action)
 
         # Add view action for this toolbar
         view_menu = self.menuBar().findChild(QMenu, "&View")
         if view_menu:
-            self.view_view_toolbar_action = self.view_toolbar.toggleViewAction(); self.view_view_toolbar_action.setText("View Controls Toolbar"); self.view_view_toolbar_action.setStatusTip("Show/Hide the View Controls Toolbar"); view_menu.addAction(self.view_view_toolbar_action)
+            self.view_view_toolbar_action = self.view_toolbar.toggleViewAction()
+            self.view_view_toolbar_action.setText("View Controls Toolbar")
+            self.view_view_toolbar_action.setStatusTip("Show/Hide the View Controls Toolbar")
+            view_menu.addAction(self.view_view_toolbar_action)
         else:
             print("Warning: Could not find View menu to add View Toolbar action.")
         self.view_toolbar.setVisible(True)
@@ -582,7 +730,12 @@ class MainWindow(QMainWindow):
         self.open_batch_action.setEnabled(enable_general_ui)
 
         # Edit Menu Actions
+        # Enable undo if previous state exists and UI is generally enabled
         self.undo_action.setEnabled(self.previous_base_image is not None and enable_general_ui)
+        # Enable compare if a 'before' image exists in the viewer and UI is generally enabled
+        self.compare_action.setEnabled(self.image_viewer.has_before_image() and enable_general_ui)
+        # Keep compare button checked state consistent with viewer mode
+        self.compare_action.setChecked(self.image_viewer._display_mode == 'before')
 
         # Panels (Adjustments, Presets) - Need an image and UI enabled
         enable_panels = can_process and enable_general_ui
@@ -622,6 +775,8 @@ class MainWindow(QMainWindow):
     # --- Image Loading/Saving ---
 
     def open_image(self):
+        # Clear histogram before loading new image
+        self.histogram_widget.clear_histogram()
         """Open a single image file."""
         file_path, _ = QFileDialog.getOpenFileName(self, "Open Negative Image", "", image_loader.SUPPORTED_FORMATS_FILTER)
         if self._is_converting_initial: # Prevent opening while converting
@@ -633,13 +788,24 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage(f"Loading {os.path.basename(file_path)}...")
                 QApplication.processEvents() # Allow status message update
 
-                # Load using the loader module
-                img_rgb = image_loader.load_image(file_path)
-                if img_rgb is None:
+                # Load using the loader module (returns image, mode, size)
+                raw_image, original_mode, file_size = image_loader.load_image(file_path)
+
+                # Update status bar with file info immediately after loading attempt
+                self._update_status_filename(file_path)
+                self._update_status_size(file_size)
+                self._update_status_mode(original_mode)
+                self._update_status_neg_type(None) # Reset neg type on new load
+
+                if raw_image is None:
                     raise ValueError("Failed to load image.")
 
                 # --- Start Background Conversion ---
                 self.current_file_path = file_path
+                self.raw_loaded_image = raw_image # Store the raw image
+                # Store metadata if load was successful
+                self._current_file_size = file_size
+                self._current_original_mode = original_mode
                 self._is_converting_initial = True
                 self.statusBar().showMessage("Converting negative (this may take a moment)...")
                 # Clear previous image and reset state before starting conversion
@@ -652,7 +818,10 @@ class MainWindow(QMainWindow):
                 QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor) # Set busy cursor
 
                 # Emit signal to start conversion in worker thread
-                self.initial_conversion_requested.emit(img_rgb)
+                # Pass the stored raw image to the conversion worker
+                # Emit signal with raw image and None for override (initial load)
+                # Emit signal with raw image and None for override (initial load) - THIS WAS ALREADY ADDED, KEEPING
+                self.initial_conversion_requested.emit(self.raw_loaded_image, None)
                 # --- End Background Conversion ---
 
             except Exception as e:
@@ -660,7 +829,16 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage(f"Error loading image: {e}", 5000)
                 # Reset state if loading failed
                 self.current_file_path = None
+                self.raw_loaded_image = None # Clear raw image on failure
+                self._current_file_size = None
+                self._current_original_mode = None
+                self._current_negative_type = None
                 self._is_converting_initial = False # Ensure flag is reset on error
+                # Reset status bar fields on load failure
+                self._update_status_filename(None)
+                self._update_status_size(None)
+                self._update_status_mode(None)
+                self._update_status_neg_type(None)
                 self.update_ui_state() # Re-enable UI
                 QApplication.restoreOverrideCursor() # Restore cursor
                 self.image_viewer.set_image(None) # Clear viewer
@@ -899,6 +1077,7 @@ class MainWindow(QMainWindow):
     def _handle_processing_finished(self, processed_image):
         """Update the image viewer when background processing is done."""
         self.image_viewer.set_image(processed_image)
+        self.histogram_widget.update_histogram(processed_image) # Update histogram
         self.statusBar().showMessage("Adjustments applied.", 1500)
         QApplication.restoreOverrideCursor() # Restore cursor
 
@@ -920,11 +1099,30 @@ class MainWindow(QMainWindow):
             self._request_pending = False
             self._pending_adjustments = None
 
+    @pyqtSlot(str)
+    def _handle_initial_conversion_error(self, error_message):
+        """Handle errors during initial conversion."""
+        QApplication.restoreOverrideCursor() # Restore cursor
+        self._is_converting_initial = False # Reset flag
+        QMessageBox.critical(self, "Conversion Error", f"Failed to convert negative:\n{error_message}")
+        self.statusBar().showMessage(f"Error during initial conversion: {error_message}", 5000)
+        self.update_ui_state() # Re-enable UI
+
+    @pyqtSlot(int, int)
+    def _handle_initial_conversion_progress(self, step, total_steps):
+        """Update status bar with initial conversion progress."""
+        if total_steps > 0:
+            percent = int((step / total_steps) * 100)
+            # Simple status message, could use a progress bar later
+            self.statusBar().showMessage(f"Converting negative... Step {step}/{total_steps} ({percent}%)")
+        else:
+            self.statusBar().showMessage("Converting negative...")
+
 
     # --- Slots for Initial Conversion Worker ---
 
-    @pyqtSlot(object)
-    def _handle_initial_conversion_finished(self, converted_image):
+    @pyqtSlot(object, str) # Update slot signature
+    def _handle_initial_conversion_finished(self, converted_image, mask_classification):
         """Handle the successfully converted image from the background thread."""
         QApplication.restoreOverrideCursor() # Restore cursor
         self._is_converting_initial = False # Reset flag
@@ -938,12 +1136,16 @@ class MainWindow(QMainWindow):
         try:
             # Store results
             self.initial_converted_image = converted_image
+            self._current_negative_type = mask_classification # Store classification
             self._store_previous_state() # Store None as the very first previous state
             self.base_image = self.initial_converted_image.copy() # Start with converted image as base
 
             # Update UI
             self.image_viewer.set_image(self.base_image) # Display the initially converted image
-            self.statusBar().showMessage(f"Loaded and converted: {os.path.basename(self.current_file_path)}", 5000)
+            self.histogram_widget.update_histogram(self.base_image) # Update histogram
+            self.histogram_widget.update_histogram(self.base_image) # Update histogram
+            self.statusBar().showMessage(f"Loaded and converted: {os.path.basename(self.current_file_path)}. Type: {mask_classification}", 5000)
+            self._update_status_neg_type(mask_classification) # Update status bar label
             self.setWindowTitle(f"Negative Converter - {os.path.basename(self.current_file_path)}")
             self.update_ui_state() # Re-enable controls now that image is ready
 
@@ -954,7 +1156,10 @@ class MainWindow(QMainWindow):
             self.current_file_path = None
             self.initial_converted_image = None
             self.base_image = None
+            self.raw_loaded_image = None # Clear raw image on display error too
+            # If base_image is None, clear previous states
             self.previous_base_image = None
+            self.image_viewer.set_before_image(None) # Clear before image in viewer
             self.image_viewer.set_image(None)
             self.update_ui_state()
 
@@ -968,6 +1173,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Conversion error: {error_message}", 5000)
         # Reset state
         self.current_file_path = None
+        self.raw_loaded_image = None # Clear raw image on conversion error
         self.initial_converted_image = None
         self.base_image = None
         self.previous_base_image = None
@@ -1025,12 +1231,21 @@ class MainWindow(QMainWindow):
 
     # --- Undo Functionality ---
     def _store_previous_state(self):
-        """Stores the current base_image before a destructive operation."""
+        """Stores the current base_image as the previous state for undo AND as the 'before' image for compare."""
         if self.base_image is not None:
+            # Store for Undo
             self.previous_base_image = self.base_image.copy()
+            # Store for Compare (only store if not already in 'before' mode to avoid overwriting)
+            if self.image_viewer._display_mode == 'after':
+                 self.image_viewer.set_before_image(self.base_image)
+            self.undo_action.setEnabled(True) # Enable undo immediately
+            self.compare_action.setEnabled(True) # Enable compare immediately
         else:
+            # If base_image is None, clear previous states
             self.previous_base_image = None
-
+            self.image_viewer.set_before_image(None) # Clear before image in viewer
+            self.undo_action.setEnabled(False)
+            self.compare_action.setEnabled(False) # Disable compare if no image
     def _clear_previous_state(self):
         """Clears the stored previous state."""
         self.previous_base_image = None
@@ -1049,7 +1264,13 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Nothing to undo.", 2000)
             print("Undo requested but no previous state stored.")
 
-        self.update_ui_state()
+        self.update_ui_state() # Update UI after undo
+
+    def toggle_compare_view(self):
+        """Slot to toggle the image viewer's compare mode."""
+        self.image_viewer.toggle_compare_mode()
+        # Update the action's checked state to match the viewer's mode
+        self.compare_action.setChecked(self.image_viewer._display_mode == 'before')
 
 
     # --- Auto Adjustment Handlers ---
@@ -1324,6 +1545,73 @@ class MainWindow(QMainWindow):
             self.update_ui_state()
 
 
+    # --- Manual Negative Type Selection ---
+
+    def _handle_neg_type_label_click(self, event):
+        """Handles clicks on the negative type status label."""
+        # Check if we have the necessary data and are not busy
+        if self.raw_loaded_image is None or self._is_converting_initial:
+            self.statusBar().showMessage("Load an image first or wait for conversion to finish.", 2000)
+            return
+
+        current_type = self._current_negative_type or "Unknown/Other"
+        # Define the canonical list of types the user can select
+        available_types = ["Likely C-41", "Clear/Near Clear", "Unknown/Other"]
+
+        # Ensure current_type is valid before trying to remove
+        if current_type not in available_types:
+             current_type = "Unknown/Other" # Default if current is somehow invalid
+
+        # Prepare the list for the dialog, potentially removing the current type
+        display_types = available_types[:] # Make a copy
+        if current_type in display_types:
+             display_types.remove(current_type) # Remove current to suggest alternatives first
+
+        # Use QInputDialog to get user selection
+        item, ok = QInputDialog.getItem(self, "Select Negative Type",
+                                        f"Current type is '{current_type}'.\nChoose override type:",
+                                        display_types, 0, False) # editable=False
+
+        if ok and item:
+            # Check if the selected type is actually different
+            if item == self._current_negative_type:
+                self.statusBar().showMessage(f"Selected type '{item}' is already active.", 2000)
+                return
+
+            # Proceed with re-conversion
+            self.statusBar().showMessage(f"Re-converting with type: {item}...")
+            QApplication.processEvents() # Update UI message
+            self._rerun_conversion_with_override(item)
+        else:
+            self.statusBar().showMessage("Negative type selection cancelled.", 2000)
+
+
+    def _rerun_conversion_with_override(self, override_type):
+        """Triggers the conversion process again with a specified override type."""
+        if self.raw_loaded_image is None:
+            QMessageBox.warning(self, "Error", "No raw image data available for re-conversion.")
+            return
+        if self._is_converting_initial: # Double-check we're not already busy
+             QMessageBox.warning(self, "Busy", "Already processing, please wait.")
+             return
+
+        self._is_converting_initial = True
+        # Clear previous results before starting re-conversion
+        self.initial_converted_image = None
+        self.base_image = None
+        self.previous_base_image = None # Reset undo state
+        self.image_viewer.set_image(None) # Clear viewer
+        self.adjustment_panel.reset_adjustments() # Reset sliders as conversion changes base image
+        self.update_ui_state() # Disable UI elements
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor) # Set busy cursor
+        self.statusBar().showMessage(f"Re-converting with type: {override_type}...") # Update status
+
+        # Emit signal with stored raw image and the selected override type
+        self.initial_conversion_requested.emit(self.raw_loaded_image, override_type)
+
+# --- End of MainWindow Class ---
+
+
 # --- Entry Point ---
 def main():
     """Application entry point."""
@@ -1332,5 +1620,7 @@ def main():
     main_window.show()
     sys.exit(app.exec())
 
+
+    # --- Definitions moved inside MainWindow class ---
 if __name__ == "__main__":
     main()

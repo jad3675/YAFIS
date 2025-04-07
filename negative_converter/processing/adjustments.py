@@ -352,6 +352,72 @@ class AdvancedAdjustments:
             return image.copy()
 
     @staticmethod
+    def apply_dust_removal(image, sensitivity=50, radius=3):
+        """
+        Attempts to remove small dark spots (dust) using morphological operations and inpainting.
+        Expects uint8 RGB image.
+        Sensitivity controls the threshold for detecting spots (higher = more sensitive).
+        Radius controls the inpainting neighborhood size.
+        """
+        if image is None or image.size == 0 or sensitivity <= 0:
+            return image.copy()
+        # Ensure radius is positive
+        radius = max(1, int(radius))
+
+        try:
+            # Convert to grayscale for detection
+            gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+
+            # --- Use Median Filter Difference for Detection ---
+            # Apply median filter. Kernel size should be odd and related to radius.
+            median_ksize = max(3, int(radius) * 2 + 1) # Ensure odd, minimum 3
+            median_filtered = cv2.medianBlur(gray, median_ksize)
+
+            # Calculate absolute difference
+            diff_image = cv2.absdiff(gray, median_filtered)
+
+            # Threshold the difference image.
+            # Higher sensitivity means a lower threshold, detecting smaller differences.
+            # Map sensitivity (0-100) to threshold (e.g., 30 down to 1). Needs tuning.
+            threshold_value = max(1, int(30 - (sensitivity * 29 / 100)))
+            _, mask = cv2.threshold(diff_image, threshold_value, 255, cv2.THRESH_BINARY)
+
+            # --- Contour Filtering (Re-enabled) ---
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            filtered_mask = np.zeros_like(mask) # Start with an empty mask
+
+            # Define min/max area thresholds (WIDENED RANGE FOR DIAGNOSTICS)
+            min_area = 1  # Allow single pixels
+            max_area = 1000 # Allow much larger areas (adjust as needed)
+
+            valid_contours = []
+            for contour in contours:
+                area = cv2.contourArea(contour)
+                if min_area <= area <= max_area:
+                    valid_contours.append(contour)
+
+            # Draw the valid contours onto the filtered mask
+            cv2.drawContours(filtered_mask, valid_contours, -1, (255), thickness=cv2.FILLED)
+
+            # Optional: Dilate the filtered mask slightly
+            # kernel_size = max(3, int(radius) * 2 + 1) # Need kernel if dilating
+            # kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size, kernel_size))
+            # filtered_mask = cv2.dilate(filtered_mask, kernel, iterations=1)
+
+            # Inpaint using the original image and the *filtered* mask
+            # cv2.INPAINT_TELEA is generally faster, cv2.INPAINT_NS might be higher quality
+            inpainted_image = cv2.inpaint(image, filtered_mask, int(radius), cv2.INPAINT_NS) # Use NS algorithm
+
+            return inpainted_image
+
+        except cv2.error as e:
+            print(f"[Adjustments Error] Dust Removal (cv2) failed: {e}")
+            return image.copy()
+        except Exception as e:
+            print(f"[Adjustments Error] Dust Removal unexpected error: {e}")
+            return image.copy()
+
+    @staticmethod
     def adjust_hsl_by_range(image, color_range, hue_shift, saturation_shift, lightness_shift):
         """Adjusts Hue, Saturation, and Lightness for a specific color range."""
         if image is None or image.size == 0 or (hue_shift == 0 and saturation_shift == 0 and lightness_shift == 0): return image.copy()
@@ -1059,6 +1125,18 @@ def apply_all_adjustments(image, adjustments_dict):
         adjustments_dict.get('curves_rgb')
     )
     if not check_img("Curves"): return None
+    print("  Pipeline Step: Curves Done.")
+
+    # --- Dust Removal ---
+    if adjustments_dict.get('dust_removal_enabled', False):
+        print("  Pipeline Step: Dust Removal...")
+        current_image = AdvancedAdjustments.apply_dust_removal(
+            current_image,
+            sensitivity=adjustments_dict.get('dust_removal_sensitivity', 50), # Default sensitivity
+            radius=adjustments_dict.get('dust_removal_radius', 3) # Default radius
+        )
+        if not check_img("Dust Removal"): return None
+        print("  Pipeline Step: Dust Removal Done.")
     print("  Pipeline Step: Curves Done.")
 
     # 5. Channel Mixer (Apply per output channel)
