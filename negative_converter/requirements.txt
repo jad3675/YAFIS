@@ -1,6 +1,0 @@
-PyQt6
-numpy
-Pillow
-opencv-contrib-python
-appdirs
-pyqtgraph
