@@ -1,0 +1,48 @@
+{
+  "id": "radiate",
+  "name": "Radiate",
+  "type": "photo",
+  "description": "Enhanced warm midtones and increased clarity",
+  "category": "Color",
+  "thumbnail": "thumbnails/radiate.jpg",
+  "parameters": {
+    "brightness": 15,
+    "contrast": 20,
+    "saturation": 25,
+    "temperature": 25,
+    "tint": 0,
+    "highlights": 0,
+    "shadows": -10,
+    "vibrance": 30,
+    "clarity": 25,
+    "toneCurve": {
+      "rgb": [
+        [
+          0,
+          0
+        ],
+        [
+          64,
+          55
+        ],
+        [
+          128,
+          140
+        ],
+        [
+          192,
+          205
+        ],
+        [
+          255,
+          255
+        ]
+      ]
+    },
+    "colorBalance": {
+      "redBalance": 1.1,
+      "greenBalance": 1.05,
+      "blueBalance": 0.95
+    }
+  }
+}

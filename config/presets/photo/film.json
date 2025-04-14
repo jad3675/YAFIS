@@ -1,0 +1,69 @@
+{
+  "id": "film",
+  "name": "Film",
+  "type": "photo",
+  "description": "Classic film look with subtle grain",
+  "category": "Vintage",
+  "thumbnail": "thumbnails/film.jpg",
+  "parameters": {
+    "brightness": 0,
+    "contrast": 10,
+    "saturation": 0,
+    "temperature": 5,
+    "tint": -5,
+    "highlights": -5,
+    "shadows": 5,
+    "vibrance": 10,
+    "toneCurve": {
+      "rgb": [
+        [
+          0,
+          5
+        ],
+        [
+          64,
+          65
+        ],
+        [
+          128,
+          125
+        ],
+        [
+          192,
+          190
+        ],
+        [
+          255,
+          245
+        ]
+      ]
+    },
+    "colorBalance": {
+      "redBalance": 1.05,
+      "greenBalance": 1.0,
+      "blueBalance": 0.95
+    },
+    "colorGrading": {
+      "shadows": [
+        0.05,
+        0.0,
+        -0.05
+      ],
+      "midtones": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "highlights": [
+        0.05,
+        0.0,
+        -0.05
+      ]
+    },
+    "grainParams": {
+      "intensity": 20,
+      "size": 0.8,
+      "roughness": 0.5
+    }
+  }
+}

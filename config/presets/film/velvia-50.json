@@ -1,0 +1,37 @@
+{
+  "id": "velvia-50",
+  "name": "Fuji Velvia 50",
+  "description": "Legendary landscape film with ultra-vivid colors and high saturation",
+  "category": "Slide Film",
+  "thumbnail": "thumbnails/velvia50.jpg",
+  "parameters": {
+    "colorMatrix": [
+      [1.35, -0.20, -0.15],
+      [-0.10, 1.35, -0.25],
+      [-0.15, -0.25, 1.40]
+    ],
+    "toneCurve": {
+      "red": [[0, 0], [64, 45], [128, 140], [192, 215], [255, 255]],
+      "green": [[0, 0], [64, 50], [128, 145], [192, 210], [255, 255]],
+      "blue": [[0, 5], [64, 55], [128, 145], [192, 205], [255, 250]]
+    },
+    "grainParams": {
+      "intensity": 8,
+      "size": 0.4,
+      "roughness": 0.3
+    },
+    "colorBalance": {
+      "redShift": 5,
+      "greenShift": 15,
+      "blueShift": 10,
+      "redBalance": 1.05,
+      "greenBalance": 1.15,
+      "blueBalance": 1.10
+    },
+    "dynamicRange": {
+      "compression": 0.7,
+      "shadowPreservation": 0.25,
+      "highlightRolloff": 0.5
+    }
+  }
+}

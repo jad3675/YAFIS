@@ -1,0 +1,36 @@
+{
+  "id": "kodachrome-64",
+  "name": "Kodachrome 64",
+  "description": "Classic Kodak slide film with vibrant reds and rich saturation",
+  "category": "Slide Film",
+  "parameters": {
+    "colorMatrix": [
+      [1.20, -0.05, -0.15],
+      [-0.10, 1.10, 0.00],
+      [0.00, -0.30, 1.30]
+    ],
+    "toneCurve": {
+      "red": [[0, 0], [128, 135], [255, 255]],
+      "green": [[0, 0], [128, 130], [255, 255]],
+      "blue": [[0, 0], [128, 120], [255, 255]]
+    },
+    "grainParams": {
+      "intensity": 12,
+      "size": 0.6,
+      "roughness": 0.4
+    },
+    "colorBalance": {
+      "redShift": 8,
+      "greenShift": -2,
+      "blueShift": 5,
+      "redBalance": 1.08,
+      "greenBalance": 0.98,
+      "blueBalance": 1.02
+    },
+    "dynamicRange": {
+      "compression": 0.85,
+      "shadowPreservation": 0.4,
+      "highlightRolloff": 0.7
+    }
+  }
+}

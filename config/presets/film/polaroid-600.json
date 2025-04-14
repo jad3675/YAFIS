@@ -1,0 +1,49 @@
+{
+  "id": "polaroid-600",
+  "name": "Polaroid 600",
+  "description": "Classic Polaroid look with distinctive colors and contrast",
+  "category": "Instant Film",
+  "thumbnail": "thumbnails/polaroid600.jpg",
+  "parameters": {
+    "colorMatrix": [
+      [1.15, -0.10, -0.05],
+      [-0.10, 1.10, 0.00],
+      [-0.05, 0.00, 1.10]
+    ],
+    "toneCurve": {
+      "red": [[0, 25], [64, 70], [128, 140], [192, 200], [255, 240]],
+      "green": [[0, 25], [64, 70], [128, 140], [192, 200], [255, 240]],
+      "blue": [[0, 35], [64, 75], [128, 135], [192, 195], [255, 235]]
+    },
+    "grainParams": {
+      "intensity": 35,
+      "size": 1.8,
+      "roughness": 0.9
+    },
+    "colorBalance": {
+      "redShift": 10,
+      "greenShift": -5,
+      "blueShift": -10,
+      "redBalance": 1.10,
+      "greenBalance": 0.95,
+      "blueBalance": 0.90
+    },
+    "dynamicRange": {
+      "compression": 0.7,
+      "shadowPreservation": 0.4,
+      "highlightRolloff": 0.5
+    },
+    "specialEffects": {
+      "vignette": {
+        "enabled": true,
+        "amount": 0.4,
+        "feather": 0.5,
+        "roundness": 1.0
+      },
+      "edgeArtifacts": {
+        "enabled": true,
+        "amount": 0.3
+      }
+    }
+  }
+}

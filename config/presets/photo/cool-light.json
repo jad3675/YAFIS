@@ -1,0 +1,47 @@
+{
+  "id": "cool-light",
+  "name": "Cool Light",
+  "type": "photo",
+  "description": "Brightened image with cool blue tones",
+  "category": "Color",
+  "thumbnail": "thumbnails/cool-light.jpg",
+  "parameters": {
+    "brightness": 15,
+    "contrast": 5,
+    "saturation": 0,
+    "temperature": -15,
+    "tint": 5,
+    "highlights": 10,
+    "shadows": 15,
+    "vibrance": 10,
+    "toneCurve": {
+      "rgb": [
+        [
+          0,
+          15
+        ],
+        [
+          64,
+          75
+        ],
+        [
+          128,
+          130
+        ],
+        [
+          192,
+          190
+        ],
+        [
+          255,
+          245
+        ]
+      ]
+    },
+    "colorBalance": {
+      "redBalance": 0.95,
+      "greenBalance": 1.0,
+      "blueBalance": 1.1
+    }
+  }
+}

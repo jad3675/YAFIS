@@ -1,0 +1,47 @@
+{
+  "id": "calm",
+  "name": "Calm",
+  "type": "photo",
+  "description": "Subtle warm tones with slightly reduced contrast",
+  "category": "Color",
+  "thumbnail": "thumbnails/calm.jpg",
+  "parameters": {
+    "brightness": 5,
+    "contrast": -5,
+    "saturation": -5,
+    "temperature": 10,
+    "tint": 0,
+    "highlights": -5,
+    "shadows": 10,
+    "vibrance": 10,
+    "toneCurve": {
+      "rgb": [
+        [
+          0,
+          5
+        ],
+        [
+          64,
+          70
+        ],
+        [
+          128,
+          130
+        ],
+        [
+          192,
+          190
+        ],
+        [
+          255,
+          250
+        ]
+      ]
+    },
+    "colorBalance": {
+      "redBalance": 1.05,
+      "greenBalance": 1.02,
+      "blueBalance": 0.97
+    }
+  }
+}

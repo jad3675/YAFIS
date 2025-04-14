@@ -1,0 +1,37 @@
+{
+  "id": "ektachrome-100",
+  "name": "Ektachrome 100",
+  "description": "Kodak slide film with neutral colors and sharper contrast than Kodachrome",
+  "category": "Slide Film",
+  "thumbnail": "thumbnails/ektachrome100.jpg",
+  "parameters": {
+    "colorMatrix": [
+      [1.10, -0.02, -0.08],
+      [-0.05, 1.05, 0.00],
+      [0.00, -0.10, 1.10]
+    ],
+    "toneCurve": {
+      "red": [[0, 0], [64, 60], [128, 130], [192, 205], [255, 255]],
+      "green": [[0, 0], [64, 60], [128, 130], [192, 205], [255, 255]],
+      "blue": [[0, 0], [64, 60], [128, 130], [192, 205], [255, 255]]
+    },
+    "grainParams": {
+      "intensity": 15,
+      "size": 0.8,
+      "roughness": 0.5
+    },
+    "colorBalance": {
+      "redShift": 0,
+      "greenShift": 0,
+      "blueShift": 2,
+      "redBalance": 1.00,
+      "greenBalance": 1.00,
+      "blueBalance": 1.02
+    },
+    "dynamicRange": {
+      "compression": 0.80,
+      "shadowPreservation": 0.45,
+      "highlightRolloff": 0.6
+    }
+  }
+}

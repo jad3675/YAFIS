@@ -1,0 +1,42 @@
+{
+  "id": "original",
+  "name": "Original",
+  "type": "photo",
+  "description": "No adjustments applied",
+  "category": "Base",
+  "thumbnail": "thumbnails/original.jpg",
+  "parameters": {
+    "brightness": 0,
+    "contrast": 0,
+    "saturation": 0,
+    "temperature": 0,
+    "tint": 0,
+    "highlights": 0,
+    "shadows": 0,
+    "vibrance": 0,
+    "toneCurve": {
+      "rgb": [
+        [
+          0,
+          0
+        ],
+        [
+          64,
+          64
+        ],
+        [
+          128,
+          128
+        ],
+        [
+          192,
+          192
+        ],
+        [
+          255,
+          255
+        ]
+      ]
+    }
+  }
+}

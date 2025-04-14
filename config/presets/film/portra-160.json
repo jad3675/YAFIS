@@ -1,0 +1,37 @@
+{
+  "id": "portra-160",
+  "name": "Kodak Portra 160",
+  "description": "Fine-grained color negative film with excellent skin tones and muted palette",
+  "category": "Color Negative",
+  "thumbnail": "thumbnails/portra160.jpg",
+  "parameters": {
+    "colorMatrix": [
+      [1.03, -0.01, -0.02],
+      [-0.02, 1.03, -0.01],
+      [-0.03, -0.02, 1.05]
+    ],
+    "toneCurve": {
+      "red": [[0, 12], [64, 72], [128, 124], [192, 186], [255, 248]],
+      "green": [[0, 12], [64, 72], [128, 124], [192, 186], [255, 248]],
+      "blue": [[0, 18], [64, 75], [128, 122], [192, 183], [255, 243]]
+    },
+    "grainParams": {
+      "intensity": 12,
+      "size": 0.6,
+      "roughness": 0.4
+    },
+    "colorBalance": {
+      "redShift": 2,
+      "greenShift": 1,
+      "blueShift": -3,
+      "redBalance": 1.02,
+      "greenBalance": 1.01,
+      "blueBalance": 0.97
+    },
+    "dynamicRange": {
+      "compression": 0.92,
+      "shadowPreservation": 0.65,
+      "highlightRolloff": 0.85
+    }
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": "bw",
+  "name": "B&W",
+  "type": "photo",
+  "description": "Classic black and white conversion",
+  "category": "Monochrome",
+  "thumbnail": "thumbnails/bw.jpg",
+  "parameters": {
+    "brightness": 0,
+    "contrast": 15,
+    "saturation": -100,
+    "temperature": 0,
+    "tint": 0,
+    "highlights": 0,
+    "shadows": 0,
+    "toneCurve": {
+      "rgb": [
+        [
+          0,
+          0
+        ],
+        [
+          64,
+          60
+        ],
+        [
+          128,
+          128
+        ],
+        [
+          192,
+          200
+        ],
+        [
+          255,
+          255
+        ]
+      ]
+    },
+    "bwMix": {
+      "red": 30,
+      "green": 59,
+      "blue": 11,
+      "yellow": 0,
+      "cyan": 0,
+      "magenta": 0
+    }
+  }
+}

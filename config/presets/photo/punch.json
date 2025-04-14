@@ -1,0 +1,47 @@
+{
+  "id": "punch",
+  "name": "Punch",
+  "type": "photo",
+  "description": "Vibrant colors with increased contrast",
+  "category": "Color",
+  "thumbnail": "thumbnails/punch.jpg",
+  "parameters": {
+    "brightness": 5,
+    "contrast": 30,
+    "saturation": 35,
+    "temperature": 5,
+    "tint": 0,
+    "highlights": -10,
+    "shadows": -15,
+    "vibrance": 40,
+    "toneCurve": {
+      "rgb": [
+        [
+          0,
+          0
+        ],
+        [
+          64,
+          50
+        ],
+        [
+          128,
+          128
+        ],
+        [
+          192,
+          210
+        ],
+        [
+          255,
+          255
+        ]
+      ]
+    },
+    "colorBalance": {
+      "redBalance": 1.05,
+      "greenBalance": 1.02,
+      "blueBalance": 1.02
+    }
+  }
+}

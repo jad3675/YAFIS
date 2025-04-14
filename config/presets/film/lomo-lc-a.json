@@ -1,0 +1,45 @@
+{
+  "id": "lomo-lc-a",
+  "name": "LOMO LC-A",
+  "description": "High contrast with vignetting and distinctive colors inspired by LOMO cameras",
+  "category": "Vintage",
+  "thumbnail": "thumbnails/lomolca.jpg",
+  "parameters": {
+    "colorMatrix": [
+      [1.25, -0.10, -0.15],
+      [-0.10, 1.20, -0.10],
+      [-0.15, -0.10, 1.25]
+    ],
+    "toneCurve": {
+      "red": [[0, 20], [64, 50], [128, 145], [192, 220], [255, 255]],
+      "green": [[0, 20], [64, 50], [128, 145], [192, 220], [255, 255]],
+      "blue": [[0, 20], [64, 50], [128, 145], [192, 220], [255, 255]]
+    },
+    "grainParams": {
+      "intensity": 40,
+      "size": 1.5,
+      "roughness": 0.8
+    },
+    "colorBalance": {
+      "redShift": 15,
+      "greenShift": -5,
+      "blueShift": 10,
+      "redBalance": 1.15,
+      "greenBalance": 0.95,
+      "blueBalance": 1.10
+    },
+    "dynamicRange": {
+      "compression": 0.6,
+      "shadowPreservation": 0.3,
+      "highlightRolloff": 0.4
+    },
+    "specialEffects": {
+      "vignette": {
+        "enabled": true,
+        "amount": 0.6,
+        "feather": 0.4,
+        "roundness": 1.0
+      }
+    }
+  }
+}

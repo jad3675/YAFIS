@@ -1,0 +1,37 @@
+{
+  "id": "delta-100",
+  "name": "Ilford Delta 100",
+  "description": "Fine-grain black and white film with excellent tonal rendition",
+  "category": "Black & White",
+  "thumbnail": "thumbnails/delta100.jpg",
+  "parameters": {
+    "colorMatrix": [
+      [0.333, 0.333, 0.333],
+      [0.333, 0.333, 0.333],
+      [0.333, 0.333, 0.333]
+    ],
+    "toneCurve": {
+      "red": [[0, 2], [64, 62], [128, 132], [192, 205], [255, 255]],
+      "green": [[0, 2], [64, 62], [128, 132], [192, 205], [255, 255]],
+      "blue": [[0, 2], [64, 62], [128, 132], [192, 205], [255, 255]]
+    },
+    "grainParams": {
+      "intensity": 15,
+      "size": 0.7,
+      "roughness": 0.4
+    },
+    "colorBalance": {
+      "redShift": 0,
+      "greenShift": 0,
+      "blueShift": 0,
+      "redBalance": 1.0,
+      "greenBalance": 1.0,
+      "blueBalance": 1.0
+    },
+    "dynamicRange": {
+      "compression": 0.8,
+      "shadowPreservation": 0.6,
+      "highlightRolloff": 0.7
+    }
+  }
+}

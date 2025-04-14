@@ -1,0 +1,37 @@
+{
+  "id": "tri-x-400",
+  "name": "Kodak Tri-X 400",
+  "description": "Classic high-contrast black and white film with distinctive grain",
+  "category": "Black & White",
+  "thumbnail": "thumbnails/tri-x400.jpg",
+  "parameters": {
+    "colorMatrix": [
+      [0.333, 0.333, 0.333],
+      [0.333, 0.333, 0.333],
+      [0.333, 0.333, 0.333]
+    ],
+    "toneCurve": {
+      "red": [[0, 5], [64, 50], [128, 145], [192, 220], [255, 245]],
+      "green": [[0, 5], [64, 50], [128, 145], [192, 220], [255, 245]],
+      "blue": [[0, 5], [64, 50], [128, 145], [192, 220], [255, 245]]
+    },
+    "grainParams": {
+      "intensity": 40,
+      "size": 1.5,
+      "roughness": 0.7
+    },
+    "colorBalance": {
+      "redShift": 0,
+      "greenShift": 0,
+      "blueShift": 0,
+      "redBalance": 1.0,
+      "greenBalance": 1.0,
+      "blueBalance": 1.0
+    },
+    "dynamicRange": {
+      "compression": 0.6,
+      "shadowPreservation": 0.4,
+      "highlightRolloff": 0.4
+    }
+  }
+}

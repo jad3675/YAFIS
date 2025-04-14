@@ -1,0 +1,47 @@
+{
+  "id": "dramatic-cool",
+  "name": "Dramatic Cool",
+  "type": "photo",
+  "description": "High contrast with deep shadows and cool tones",
+  "category": "Color",
+  "thumbnail": "thumbnails/dramatic-cool.jpg",
+  "parameters": {
+    "brightness": -5,
+    "contrast": 40,
+    "saturation": 15,
+    "temperature": -20,
+    "tint": 5,
+    "highlights": -10,
+    "shadows": -30,
+    "vibrance": 20,
+    "toneCurve": {
+      "rgb": [
+        [
+          0,
+          0
+        ],
+        [
+          64,
+          40
+        ],
+        [
+          128,
+          125
+        ],
+        [
+          192,
+          220
+        ],
+        [
+          255,
+          255
+        ]
+      ]
+    },
+    "colorBalance": {
+      "redBalance": 0.92,
+      "greenBalance": 0.98,
+      "blueBalance": 1.12
+    }
+  }
+}
