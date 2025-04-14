@@ -1,0 +1,47 @@
+{
+  "id": "vivid-cool",
+  "name": "Vivid Cool",
+  "type": "photo",
+  "description": "Vibrant colors with a cool blue-cyan shift",
+  "category": "Color",
+  "thumbnail": "thumbnails/vivid-cool.jpg",
+  "parameters": {
+    "brightness": 5,
+    "contrast": 25,
+    "saturation": 30,
+    "temperature": -25,
+    "tint": 0,
+    "highlights": -5,
+    "shadows": -10,
+    "vibrance": 35,
+    "toneCurve": {
+      "rgb": [
+        [
+          0,
+          0
+        ],
+        [
+          64,
+          50
+        ],
+        [
+          128,
+          135
+        ],
+        [
+          192,
+          210
+        ],
+        [
+          255,
+          255
+        ]
+      ]
+    },
+    "colorBalance": {
+      "redBalance": 0.9,
+      "greenBalance": 1.0,
+      "blueBalance": 1.15
+    }
+  }
+}
