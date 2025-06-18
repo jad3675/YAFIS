@@ -29,9 +29,9 @@ This application converts digital scans of film negatives into positive images. 
     pip install PyQt6 numpy opencv-python opencv-contrib-python appdirs
     # Optional: pip install cupy-cudaXXX (replace XXX with your CUDA version, e.g., 118 or 12x)
     ```
-2.  **Run:** Execute the main script from the project's root directory:
+2.  **Run:** Execute the main script from the project's parent directory:
     ```bash
-    python main.py
+    python -m negative_converter.main
     ```
 3.  **Open Image:** Use `File > Open Negative...` to load a scanned negative.
 4.  **Adjust:** Use the panels on the right to apply adjustments and presets.
