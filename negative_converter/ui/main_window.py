@@ -5,12 +5,14 @@ import numpy as np
 from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QMenu,
                              QStatusBar, QFileDialog, QMessageBox, QDockWidget, QApplication, # Ensure QApplication is imported
                              QToolBar, QPushButton, QProgressBar, QLabel, QComboBox, QSpinBox, QWidgetAction,
-                             QInputDialog)
+                             QInputDialog, QSlider)
 from PyQt6.QtGui import QAction, QIcon, QKeySequence
-from PyQt6.QtCore import Qt, QSize, QThread, QObject, pyqtSignal, pyqtSlot, QMetaObject
+from PyQt6.QtCore import Qt, QSize, QThread, QObject, pyqtSignal, pyqtSlot, QMetaObject, QTimer
 import concurrent.futures
 import math
-# import os # Already imported
+
+from ..utils.logger import get_logger
+logger = get_logger(__name__)
 
 # Import UI components
 from .image_viewer import ImageViewer
@@ -29,6 +31,7 @@ from ..io import image_loader, image_saver
 from ..processing import NegativeConverter, FilmPresetManager, PhotoPresetManager, ImageAdjustments
 from ..processing.adjustments import AdvancedAdjustments
 from ..processing.batch import process_batch_with_adjustments
+from ..services.conversion_service import ConversionService, PresetInfo
 
 
 # --- Worker Class for Background Processing ---
@@ -54,9 +57,7 @@ class ImageProcessingWorker(QObject):
                 raise ValueError("Processing function returned None.")
             self.finished.emit(processed_image)
         except Exception as e:
-            import traceback
-            print(f"Error during background processing call: {e}")
-            traceback.print_exc()
+            logger.exception("Error during background processing call")
             self.error.emit(f"Processing failed: {e}")
         finally:
             self._is_running = False
@@ -98,12 +99,38 @@ class InitialConversionWorker(QObject):
             converted_image, mask_classification = result_tuple
             self.finished.emit(converted_image, mask_classification) # Emit both results
         except Exception as e:
-            import traceback
-            print(f"Error during initial conversion call: {e}")
-            traceback.print_exc()
+            logger.exception("Error during initial conversion call")
             self.error.emit(f"Initial conversion failed: {e}")
         finally:
             self._is_running = False
+
+# --- Auto Tone Worker ---
+class AutoToneWorker(QObject):
+    """Worker to compute Auto Tone parameters off the UI thread."""
+    finished = pyqtSignal(dict)  # emits tone params dict
+    error = pyqtSignal(str)
+
+    def __init__(self, compute_func):
+        super().__init__()
+        self.compute_func = compute_func
+        self._is_running = False
+
+    @pyqtSlot(object)
+    def run(self, base_image):
+        if self._is_running:
+            return
+        self._is_running = True
+        try:
+            params = self.compute_func(base_image)
+            if not isinstance(params, dict):
+                raise ValueError("Auto Tone returned invalid params.")
+            self.finished.emit(params)
+        except Exception as e:
+            logger.exception("Error during Auto Tone computation")
+            self.error.emit(f"Auto Tone failed: {e}")
+        finally:
+            self._is_running = False
+
 
 # --- Batch Processing Worker ---
 class BatchProcessingWorker(QObject):
@@ -162,9 +189,7 @@ class BatchProcessingWorker(QObject):
             self.finished.emit(final_results)
 
         except Exception as e:
-            import traceback
-            print(f"Error during batch processing call: {e}")
-            traceback.print_exc()
+            logger.exception("Error during batch processing call")
             self.error.emit(f"Batch processing failed: {e}")
         finally:
             self._is_running = False
@@ -175,12 +200,14 @@ class MainWindow(QMainWindow):
     """Main application window."""
     # Signal to request processing in the worker thread
     processing_requested = pyqtSignal(object, dict)
+
     # Signals for initial conversion worker
-    # Use the new signal with override parameter
-    # Signal definition already updated, KEEPING
     initial_conversion_requested = pyqtSignal(object, object) # raw_image, override_type
     initial_conversion_finished = pyqtSignal(object, str) # Emits (converted_image, mask_classification)
     initial_conversion_error = pyqtSignal(str)
+
+    # Signal to request Auto Tone computation in its worker thread
+    _auto_tone_requested = pyqtSignal(object)
 
 
     def __init__(self, parent=None):
@@ -213,8 +240,25 @@ class MainWindow(QMainWindow):
         self.basic_adjuster = ImageAdjustments()
         self.advanced_adjuster = AdvancedAdjustments()
 
+        # Ensure the adjustment pipeline uses the same preset manager instances as the UI.
+        try:
+            from ..processing.adjustments import set_film_preset_manager, set_photo_preset_manager
+            set_film_preset_manager(self.film_preset_manager)
+            set_photo_preset_manager(self.photo_preset_manager)
+        except Exception:
+            logger.exception("Failed to inject preset managers into adjustments pipeline")
+
+        # --- Service Facade (UI -> processing/IO) ---
+        self.conversion_service = ConversionService(
+            converter=self.negative_converter,
+            film_preset_manager=self.film_preset_manager,
+            photo_preset_manager=self.photo_preset_manager,
+        )
+
         # --- Background Processing Thread ---
         self.processing_thread = QThread(self)
+        # --- Auto Tone Thread ---
+        self.auto_tone_thread = QThread(self)
         # --- Initial Conversion Thread ---
         self.initial_conversion_thread = QThread(self)
         # Pass the actual conversion method of the instance
@@ -235,6 +279,15 @@ class MainWindow(QMainWindow):
         self.processing_worker.error.connect(self._handle_processing_error)
         self.processing_thread.start()
 
+        # Auto Tone worker setup
+        self._is_auto_tone_running = False
+        self.auto_tone_worker = AutoToneWorker(AdvancedAdjustments.calculate_auto_tone_params)
+        self.auto_tone_worker.moveToThread(self.auto_tone_thread)
+        self._auto_tone_requested.connect(self.auto_tone_worker.run, Qt.ConnectionType.QueuedConnection)
+        self.auto_tone_worker.finished.connect(self._handle_auto_tone_finished)
+        self.auto_tone_worker.error.connect(self._handle_auto_tone_error)
+        self.auto_tone_thread.start()
+
         # --- Batch Processing Thread (Single instance) ---
         self.batch_thread = QThread(self)
         self.batch_worker = BatchProcessingWorker(process_batch_with_adjustments)
@@ -252,6 +305,14 @@ class MainWindow(QMainWindow):
         self.create_batch_toolbar() # Create the batch toolbar
         self.create_view_toolbar()  # Create the view controls toolbar
         self.create_toolbars()      # Create other standard toolbars (if any)
+
+        # Compare slider throttling state
+        self._compare_slider_debounce_ms = 50
+        self._compare_slider_debounce_timer = QTimer(self)
+        self._compare_slider_debounce_timer.setSingleShot(True)
+        self._compare_slider_pending_value = None
+        self._compare_slider_is_dragging = False
+        self._compare_slider_debounce_timer.timeout.connect(self._apply_pending_compare_slider_value)
 
         # Connect signals from panels
         self.adjustment_panel.adjustment_changed.connect(self.handle_adjustment_change)
@@ -333,7 +394,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Load and convert an image first", 3000)
             return
 
-        print(f"DEBUG: handle_auto_wb called with method: {method}")
+        logger.debug("handle_auto_wb called with method: %s", method)
         awb_params = {'temp': 0, 'tint': 0} # Default
 
         try:
@@ -351,7 +412,7 @@ class MainWindow(QMainWindow):
             # elif method == 'near_white':
             #     awb_params = AdvancedAdjustments.calculate_near_white_awb_params(self.base_image, percentile=1.0)
             else:
-                print(f"WARNING: Unknown AWB method '{method}' requested. Using default.")
+                logger.warning("Unknown AWB method '%s' requested. Using default.", method)
                 # Optionally default to one method, e.g., Near-White or Gray World
                 # awb_params = AdvancedAdjustments.calculate_near_white_awb_params(self.base_image)
 
@@ -369,8 +430,7 @@ class MainWindow(QMainWindow):
 
         # Add the except block for the main try statement (line 338)
         except Exception as e:
-            import traceback
-            traceback.print_exc()
+            logger.exception("Auto White Balance calculation failed (method=%s)", method)
             self.statusBar().showMessage(f"Auto White Balance calculation failed: {str(e)}", 5000)
         # The 'else' block related to the initial 'if self.base_image is None:' check
         # is already handled by the return statement on line 333.
@@ -403,8 +463,7 @@ class MainWindow(QMainWindow):
 
                 self.statusBar().showMessage(f"Auto Levels calculated (mode: {colorspace_mode}, midrange: {midrange:.2f})", 3000)
             except Exception as e:
-                import traceback
-                traceback.print_exc()
+                logger.exception("Auto Levels calculation failed (mode=%s, midrange=%s)", colorspace_mode, midrange)
                 self.statusBar().showMessage(f"Auto Levels calculation failed: {str(e)}", 5000)
         else:
             self.statusBar().showMessage("Load and convert an image first", 3000)
@@ -434,46 +493,60 @@ class MainWindow(QMainWindow):
 
                 self.statusBar().showMessage(f"Auto Color ({method}) calculated", 3000)
             except Exception as e:
-                import traceback
-                traceback.print_exc()
+                logger.exception("Auto Color calculation failed (method=%s)", method)
                 self.statusBar().showMessage(f"Auto Color calculation failed: {str(e)}", 5000)
         else:
             self.statusBar().showMessage("Load and convert an image first", 3000)
 
     @pyqtSlot()
     def handle_auto_tone(self):
-        """Handle Auto Tone request."""
-        # Use base_image (the initially converted image) for calculations
-        if self.base_image is not None:
-            try:
-                # Calculate the combined parameters
-                tone_params = AdvancedAdjustments.calculate_auto_tone_params(
-                    self.base_image
-                    # Can pass specific args here if needed, e.g.,
-                    # nr_strength=self.settings.value("auto_tone/nr_strength", 5, type=int)
-                )
-
-                # Update the adjustment panel with the calculated parameters
-                # Note: Clarity is handled separately by the main pipeline based on its slider
-                # Update adjustment panel, temporarily disconnecting signal
-                try:
-                    self.adjustment_panel.adjustment_changed.disconnect(self.handle_adjustment_change)
-                except TypeError:
-                    pass
-                self.adjustment_panel.set_adjustments(tone_params)
-                self.adjustment_panel.adjustment_changed.connect(self.handle_adjustment_change)
-                # Manually trigger the processing now
-                self.handle_adjustment_change(self.adjustment_panel._current_adjustments)
-
-                self.statusBar().showMessage("Auto Tone parameters calculated", 3000)
-            except Exception as e:
-                import traceback
-                traceback.print_exc()
-                self.statusBar().showMessage(f"Auto Tone calculation failed: {str(e)}", 5000)
-        else:
+        """Handle Auto Tone request (runs in background)."""
+        if self.base_image is None:
             self.statusBar().showMessage("Load and convert an image first", 3000)
-        self.tabifyDockWidget(self.photo_preset_dock, self.histogram_dock) # Add histogram to tabs
-        self.adjustment_dock.raise_()
+            return
+        if self._is_converting_initial or self._request_pending or self._is_auto_tone_running:
+            self.statusBar().showMessage("Busy—please wait…", 2000)
+            return
+
+        self._is_auto_tone_running = True
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        self.statusBar().showMessage("Calculating Auto Tone…", 0)
+        self.update_ui_state()
+
+        # Run in worker thread:
+        # QMetaObject.invokeMethod doesn't accept arbitrary Python objects cleanly in PyQt6.
+        # Emit a queued signal instead.
+        self._auto_tone_requested.emit(self.base_image.copy())
+
+    @pyqtSlot(dict)
+    def _handle_auto_tone_finished(self, tone_params: dict):
+        """Apply computed auto tone params on UI thread."""
+        try:
+            # Update adjustment panel without triggering multiple reprocesses
+            try:
+                self.adjustment_panel.adjustment_changed.disconnect(self.handle_adjustment_change)
+            except TypeError:
+                pass
+
+            self.adjustment_panel.set_adjustments(tone_params)
+
+            self.adjustment_panel.adjustment_changed.connect(self.handle_adjustment_change)
+
+            # Trigger processing once with the updated adjustments
+            self.handle_adjustment_change(self.adjustment_panel._current_adjustments)
+            self.statusBar().showMessage("Auto Tone applied.", 3000)
+        finally:
+            self._is_auto_tone_running = False
+            QApplication.restoreOverrideCursor()
+            self.update_ui_state()
+
+    @pyqtSlot(str)
+    def _handle_auto_tone_error(self, error_message: str):
+        self._is_auto_tone_running = False
+        QApplication.restoreOverrideCursor()
+        logger.error("Auto Tone error: %s", error_message)
+        self.statusBar().showMessage(error_message, 5000)
+        self.update_ui_state()
 
     def create_actions(self):
         """Create QAction objects for menus and toolbars."""
@@ -699,6 +772,23 @@ class MainWindow(QMainWindow):
         zoom_fit_action.triggered.connect(self.image_viewer.fit_to_window) # Correct method name
         self.view_toolbar.addAction(zoom_fit_action)
 
+        # --- Compare wipe slider (Before/After wipe) ---
+        self.view_toolbar.addSeparator()
+        self.view_toolbar.addWidget(QLabel(" Compare: "))
+
+        # Clear left/right semantics: [Before] [----slider----] [After]
+        self.view_toolbar.addWidget(QLabel("Before"))
+        self.compare_slider = QSlider(Qt.Orientation.Horizontal, self)
+        self.compare_slider.setRange(0, 100)
+        self.compare_slider.setValue(100)  # default: all "after"
+        self.compare_slider.setMaximumWidth(180)
+        self.compare_slider.setToolTip("Before/After wipe (0=Before, 100=After)")
+        self.compare_slider.valueChanged.connect(self._on_compare_slider_changed)
+        self.compare_slider.sliderPressed.connect(self._on_compare_slider_pressed)
+        self.compare_slider.sliderReleased.connect(self._on_compare_slider_released)
+        self.view_toolbar.addWidget(self.compare_slider)
+        self.view_toolbar.addWidget(QLabel("After"))
+
         # Add view action for this toolbar
         view_menu = self.menuBar().findChild(QMenu, "&View")
         if view_menu:
@@ -796,7 +886,7 @@ class MainWindow(QMainWindow):
             status = "OK" if success else "FAIL"
             detailed_message += f"- {os.path.basename(file_path)}: {status} ({message})\n"
 
-        print(detailed_message) # Log detailed results
+        logger.info("Batch processing results:\n%s", detailed_message)
         QMessageBox.information(self, "Batch Processing Complete", summary_message)
         self.statusBar().showMessage("Batch processing complete.", 5000)
 
@@ -845,11 +935,15 @@ class MainWindow(QMainWindow):
     def update_ui_state(self):
         """Enable/disable actions and controls based on application state."""
         image_loaded = self.base_image is not None
-        # Check flags we explicitly manage: initial conversion or a pending adjustment request
-        is_processing = self._is_converting_initial or self._request_pending
-        # Add a print statement here for debugging
-        print(f"update_ui_state: image_loaded={image_loaded}, _is_converting_initial={self._is_converting_initial}, _request_pending={self._request_pending}, is_processing={is_processing}")
-
+        # Check flags we explicitly manage: initial conversion, a pending adjustment request, or auto tone
+        is_processing = self._is_converting_initial or self._request_pending or getattr(self, "_is_auto_tone_running", False)
+        logger.debug(
+            "update_ui_state: image_loaded=%s, _is_converting_initial=%s, _request_pending=%s, is_processing=%s",
+            image_loaded,
+            self._is_converting_initial,
+            self._request_pending,
+            is_processing,
+        )
 
         self.save_as_action.setEnabled(image_loaded and not is_processing)
         self.compare_action.setEnabled(image_loaded and not is_processing)
@@ -857,6 +951,14 @@ class MainWindow(QMainWindow):
         self.adjustment_panel.setEnabled(image_loaded and not is_processing)
         self.film_preset_panel.setEnabled(image_loaded and not is_processing)
         self.photo_preset_panel.setEnabled(image_loaded and not is_processing)
+
+        # Compare wipe slider: enabled only when a before-image exists and not processing.
+        has_before = self.image_viewer.has_before_image()
+        if hasattr(self, "compare_slider"):
+            self.compare_slider.setEnabled(image_loaded and has_before and not is_processing)
+            self.compare_slider.setVisible(image_loaded and has_before)
+
+        # Photo preset panel no longer contains a "Save Preset..." button; nothing to update here.
 
         # Batch processing controls
         has_batch_items = self.filmstrip_widget.list_widget.count() > 0
@@ -883,7 +985,7 @@ class MainWindow(QMainWindow):
             QApplication.processEvents() # Allow UI to update
             try:
                 # Store raw loaded image first, unpack all return values
-                self.raw_loaded_image, original_mode, file_size = image_loader.load_image(file_path)
+                self.raw_loaded_image, original_mode, file_size = self.conversion_service.load_image(file_path)
                 if self.raw_loaded_image is None:
                     raise ValueError("Image loader returned None.")
 
@@ -966,30 +1068,30 @@ class MainWindow(QMainWindow):
                     # Fetch current JPEG quality from settings
                     quality = app_settings.UI_DEFAULTS.get("default_jpeg_quality", 95)
                     quality_params['quality'] = quality
-                    print(f"Using JPEG quality from settings: {quality}") # Log/Debug
+                    logger.debug("Using JPEG quality from settings: %s", quality)
 
                 elif ext == '.png':
                     # Fetch current PNG compression from settings
                     compression = app_settings.UI_DEFAULTS.get("default_png_compression", 6) # Using 6 as a more typical default now
                     quality_params['png_compression'] = compression
-                    print(f"Using PNG compression from settings: {compression}") # Log/Debug
+                    logger.debug("Using PNG compression from settings: %s", compression)
 
                 elif ext == '.webp':
                     # Fetch current WebP quality from settings (assuming it uses 'default_jpeg_quality' for simplicity, or add a specific setting)
                     # Let's reuse JPEG quality setting for WebP for now.
                     quality = app_settings.UI_DEFAULTS.get("default_jpeg_quality", 90) # Default 90 for WebP if not set
                     quality_params['quality'] = quality
-                    print(f"Using WebP quality from settings: {quality}") # Log/Debug
+                    logger.debug("Using WebP quality from settings: %s", quality)
 
                 elif ext in ['.tif', '.tiff']:
                     # Add TIFF specific params if needed, e.g., compression
                     quality_params['compression'] = 'tiff_lzw' # Example: LZW compression
-                    print("Using TIFF LZW compression.")
+                    logger.debug("Using TIFF LZW compression.")
 
                 # Other formats currently don't have specific quality/compression settings here
 
                 # Save using the saver module
-                success = image_saver.save_image(final_image_to_save, file_path, **quality_params)
+                success = self.conversion_service.save_image(final_image_to_save, file_path, **quality_params)
 
                 if success:
                     self.statusBar().showMessage(f"Image saved successfully to {file_path}", 5000)
@@ -1044,11 +1146,17 @@ class MainWindow(QMainWindow):
         # Clean up threads
         self.processing_thread.quit()
         self.processing_thread.wait(1000) # Wait max 1 sec
+
+        self.auto_tone_thread.quit()
+        self.auto_tone_thread.wait(1000)
+
         self.initial_conversion_thread.quit()
         self.initial_conversion_thread.wait(1000)
+
         self.batch_thread.quit()
         self.batch_thread.wait(1000)
-        print("Background threads stopped.")
+
+        logger.info("Background threads stopped.")
         event.accept()
 
     # --- UI Interaction Handlers ---
@@ -1057,13 +1165,13 @@ class MainWindow(QMainWindow):
     def handle_filmstrip_preview(self, file_path):
         """Load and display the selected image from the filmstrip for preview."""
         if file_path and file_path != self.current_file_path:
-            print(f"Filmstrip preview requested for: {os.path.basename(file_path)}")
+            logger.debug("Filmstrip preview requested for: %s", os.path.basename(file_path))
             # Essentially the same logic as open_image, but without the file dialog
             self.statusBar().showMessage(f"Loading preview: {os.path.basename(file_path)}...")
             QApplication.processEvents()
             try:
                 # Unpack all return values
-                self.raw_loaded_image, original_mode, file_size = image_loader.load_image(file_path)
+                self.raw_loaded_image, original_mode, file_size = self.conversion_service.load_image(file_path)
                 if self.raw_loaded_image is None:
                     raise ValueError("Image loader returned None.")
 
@@ -1105,16 +1213,14 @@ class MainWindow(QMainWindow):
         """Request reprocessing when an adjustment slider/value changes."""
         # Clear any active preset when manual adjustments are made
         self._active_preset_details = None
-        # print(f"DEBUG: handle_adjustment_change triggered. Adjustments: {adjustments_dict.keys()}") # Debug Auto Actions
         # Existing logic to request processing follows...
-        self.request_processing(adjustments_dict) # Assuming this is the next step
         self.request_processing(adjustments_dict)
 
     def request_processing(self, adjustments):
         """Emit signal to request processing in the worker thread."""
         # print(f"DEBUG: request_processing called. base_image is None: {self.base_image is None}, _is_converting_initial: {self._is_converting_initial}, _request_pending: {self._request_pending}") # Debug Auto Actions
         if self.base_image is None or self._is_converting_initial:
-            print("DEBUG: Skipping processing request: No base image or initial conversion running.") # Debug
+            logger.debug("Skipping processing request: no base image or initial conversion running.")
             return # Don't process if no base image or initial conversion is happening
 
         # Avoid queuing up too many requests if the user is rapidly changing sliders
@@ -1162,7 +1268,7 @@ class MainWindow(QMainWindow):
     @pyqtSlot(str)
     def _handle_processing_error(self, error_message):
         """Show processing errors."""
-        print(f"Processing error: {error_message}") # Log error
+        logger.error("Processing error: %s", error_message)
         self.statusBar().showMessage(f"Error applying adjustments: {error_message}", 5000)
         self._request_pending = False # Allow new requests even on error
         self._pending_adjustments = None # Clear pending request on error
@@ -1198,7 +1304,7 @@ class MainWindow(QMainWindow):
              self._handle_initial_conversion_error("Conversion worker returned None image.")
              return
 
-        print(f"Initial conversion finished. Mask classified as: {mask_classification}")
+        logger.info("Initial conversion finished. Mask classified as: %s", mask_classification)
         self.statusBar().showMessage("Initial conversion complete.", 2000)
         self._is_converting_initial = False
 
@@ -1230,27 +1336,29 @@ class MainWindow(QMainWindow):
         # self.request_processing(default_adjustments)
 
 
+    def get_current_image_for_processing(self):
+        """
+        Provides the current image (post-initial-conversion base) for UI components
+        that need to know whether saving presets is possible.
+        """
+        return self.base_image.copy() if self.base_image is not None else None
+
     # --- Image Processing Logic ---
 
     def _apply_tile_adjustments(self, tile_image, adjustments):
         """Applies adjustments to a single tile (placeholder)."""
         # In a real scenario, this would call adjustment functions
-        return apply_all_adjustments(tile_image, adjustments) # Use the imported function
+        return self.conversion_service.apply_adjustments(tile_image, adjustments)
 
     def _get_fully_adjusted_image(self, base_image, adjustments):
         """Applies all current adjustments to the base image."""
         if base_image is None:
             return None
         try:
-            # print("Applying adjustments:", adjustments) # Debug
             # For now, apply directly. Could use tiling for large images later.
-            adjusted_image = apply_all_adjustments(base_image.copy(), adjustments)
-            # print("Adjustments applied successfully.") # Debug
-            return adjusted_image
+            return self.conversion_service.apply_adjustments(base_image.copy(), adjustments)
         except Exception as e:
-            print(f"Error applying adjustments in _get_fully_adjusted_image: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("Error applying adjustments in _get_fully_adjusted_image")
             # Propagate the error message back via the worker's error signal
             raise # Re-raise the exception to be caught by the worker's run method
 
@@ -1261,7 +1369,7 @@ class MainWindow(QMainWindow):
         if self.base_image is not None:
             # Store the image *before* the destructive operation
             # This should be called just before applying presets or other non-reversible ops
-            print("Storing state for undo.")
+            logger.debug("Storing state for undo.")
             self.previous_base_image = self.base_image.copy()
             self.update_ui_state() # Enable undo action
 
@@ -1269,7 +1377,7 @@ class MainWindow(QMainWindow):
     def undo_last_destructive_op(self):
         """Reverts to the previously stored base image."""
         if self.previous_base_image is not None:
-            print("Performing undo.")
+            logger.debug("Performing undo.")
             self.base_image = self.previous_base_image.copy()
             self.previous_base_image = None # Can only undo once per stored state
             # Reset adjustments and update viewer
@@ -1282,24 +1390,87 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Nothing to undo.", 2000)
 
     def toggle_compare_view(self):
-        """Toggle the image viewer between 'before' (initial conversion) and 'after' (current adjustments)."""
+        """Toggle the image viewer between 'before' and 'after'.
+
+        If wipe-compare is active, disable it and fall back to the original toggle behavior.
+        """
         if self.initial_converted_image is None:
             self.compare_action.setChecked(False) # Cannot compare if no initial image
             return
+
+        # If wipe is enabled, turn it off when user hits toggle-compare.
+        if hasattr(self, "compare_slider"):
+            self.image_viewer.set_compare_wipe_enabled(False)
+            self.compare_slider.blockSignals(True)
+            self.compare_slider.setValue(100)
+            self.compare_slider.blockSignals(False)
 
         # Call the ImageViewer's internal toggle method
         self.image_viewer.toggle_compare_mode()
 
         # Update the histogram based on the viewer's *new* mode
         if self.image_viewer._display_mode == 'before': # Access internal state (less ideal, but necessary here)
-             self.histogram_widget.update_histogram(self.initial_converted_image)
+            self.histogram_widget.update_histogram(self.initial_converted_image)
         else: # 'after' mode
-             current_adjusted = self._get_fully_adjusted_image(self.base_image, self.adjustment_panel.get_adjustments())
-             if current_adjusted is not None: # Handle potential error in adjustment
-                 self.histogram_widget.update_histogram(current_adjusted)
-             else: # Fallback if adjustment fails
-                 self.histogram_widget.update_histogram(self.base_image)
+            current_adjusted = self._get_fully_adjusted_image(self.base_image, self.adjustment_panel.get_adjustments())
+            if current_adjusted is not None: # Handle potential error in adjustment
+                self.histogram_widget.update_histogram(current_adjusted)
+            else: # Fallback if adjustment fails
+                self.histogram_widget.update_histogram(self.base_image)
 
+
+    def _on_compare_slider_pressed(self):
+        self._compare_slider_is_dragging = True
+
+    def _on_compare_slider_released(self):
+        self._compare_slider_is_dragging = False
+        # Apply final value immediately on release (so the user sees the exact position).
+        if self._compare_slider_pending_value is not None:
+            self._apply_compare_slider_value(int(self._compare_slider_pending_value))
+            self._compare_slider_pending_value = None
+
+    def _apply_pending_compare_slider_value(self):
+        if self._compare_slider_pending_value is None:
+            return
+        self._apply_compare_slider_value(int(self._compare_slider_pending_value))
+        # Keep pending value while dragging so release can apply instantly; clear only if not dragging.
+        if not self._compare_slider_is_dragging:
+            self._compare_slider_pending_value = None
+
+    def _on_compare_slider_changed(self, value: int):
+        """Throttle wipe-compare updates to avoid repaint storms."""
+        if self.initial_converted_image is None or self.base_image is None:
+            return
+
+        self._compare_slider_pending_value = int(value)
+
+        # While dragging: debounce updates (every ~50ms).
+        # When not dragging (e.g. keyboard step): apply immediately.
+        if self._compare_slider_is_dragging:
+            self._compare_slider_debounce_timer.start(self._compare_slider_debounce_ms)
+            return
+
+        self._apply_compare_slider_value(int(value))
+
+    def _apply_compare_slider_value(self, value: int):
+        """Apply a compare slider value (0..100) to the viewer."""
+        # Enable wipe compare when slider is between endpoints; disable at endpoints.
+        enable_wipe = (0 < int(value) < 100)
+        self.image_viewer.set_compare_wipe_enabled(enable_wipe)
+        self.image_viewer.set_compare_wipe_percent(int(value))
+
+        # Histogram: update only at endpoints.
+        if int(value) == 0:
+            self.histogram_widget.update_histogram(self.initial_converted_image)
+        elif int(value) == 100:
+            # IMPORTANT: don't recompute full adjustments on the UI thread here.
+            # Just show the histogram of the current displayed "after" image.
+            # (Keeping UI responsive is more important than exact histogram at this moment.)
+            after_img = getattr(self.image_viewer, "_current_image", None)
+            if after_img is not None:
+                self.histogram_widget.update_histogram(after_img)
+            else:
+                self.histogram_widget.update_histogram(self.base_image)
 
     # --- Auto Adjustment Handlers ---
 
@@ -1316,7 +1487,7 @@ class MainWindow(QMainWindow):
     def handle_color_sampled(self, rgb_tuple):
         """Receives the sampled color from the viewer and passes it to the adjustment panel."""
         if rgb_tuple:
-            print(f"Color sampled: {rgb_tuple}")
+            logger.debug("Color sampled: %s", rgb_tuple)
             r, g, b = rgb_tuple
 
             # Avoid issues if sampled color is pure black (unlikely neutral)
@@ -1344,7 +1515,7 @@ class MainWindow(QMainWindow):
             temp_slider_val = int(round(np.clip(temp_slider_val, -100, 100)))
             tint_slider_val = int(round(np.clip(tint_slider_val, -100, 100)))
 
-            print(f"Calculated WB adjustments: Temp={temp_slider_val}, Tint={tint_slider_val}")
+            logger.debug("Calculated WB adjustments: Temp=%s, Tint=%s", temp_slider_val, tint_slider_val)
 
             # Apply the calculated adjustments to the panel
             # Apply the calculated adjustments to the panel and trigger update
@@ -1360,7 +1531,7 @@ class MainWindow(QMainWindow):
     def handle_awb_request(self, method):
         """Handles the Auto White Balance request."""
         if self.base_image is None: return
-        print(f"AWB requested with method: {method}")
+        logger.info("AWB requested with method: %s", method)
         self.statusBar().showMessage(f"Applying Auto White Balance ({method})...")
         QApplication.processEvents()
         try:
@@ -1391,7 +1562,7 @@ class MainWindow(QMainWindow):
     def handle_auto_level_request(self, mode, midrange):
         """Handles the Auto Levels request."""
         if self.base_image is None: return
-        print(f"Auto Levels requested. Mode: {mode}, Midrange: {midrange}")
+        logger.info("Auto Levels requested. Mode=%s, Midrange=%s", mode, midrange)
         self.statusBar().showMessage("Applying Auto Levels...")
         QApplication.processEvents()
         try:
@@ -1426,7 +1597,7 @@ class MainWindow(QMainWindow):
     def handle_auto_color_request(self, method):
         """Handles the Auto Color request."""
         if self.base_image is None: return
-        print(f"Auto Color requested with method: {method}")
+        logger.info("Auto Color requested with method: %s", method)
         self.statusBar().showMessage(f"Applying Auto Color ({method})...")
         QApplication.processEvents()
         try:
@@ -1459,7 +1630,7 @@ class MainWindow(QMainWindow):
     def handle_auto_tone_request(self):
         """Handles the Auto Tone request."""
         if self.base_image is None: return
-        print("Auto Tone requested.")
+        logger.info("Auto Tone requested.")
         self.statusBar().showMessage("Applying Auto Tone...")
         QApplication.processEvents()
         try:
@@ -1498,7 +1669,13 @@ class MainWindow(QMainWindow):
         # preset_type is now directly the string 'film' or None
         # preset_id is now directly the string ID or None
 
-        print(f"Preset preview requested: Type={preset_type}, ID={preset_id}, Intensity={intensity}, Grain={grain_scale}")
+        logger.debug(
+            "Preset preview requested: Type=%s, ID=%s, Intensity=%s, Grain=%s",
+            preset_type,
+            preset_id,
+            intensity,
+            grain_scale,
+        )
 
         # Get current adjustments from the panel *before* applying the preset preview
         # This allows the preview to stack on existing adjustments
@@ -1530,7 +1707,13 @@ class MainWindow(QMainWindow):
         # preset_type is now directly the string 'film' or None
         # preset_id is now directly the string ID or None
 
-        print(f"Applying preset: Type={preset_type}, ID={preset_id}, Intensity={intensity}, Grain={grain_scale}")
+        logger.info(
+            "Applying preset: Type=%s, ID=%s, Intensity=%s, Grain=%s",
+            preset_type,
+            preset_id,
+            intensity,
+            grain_scale,
+        )
         self.statusBar().showMessage(f"Applying {preset_type} preset: {preset_id}...")
         QApplication.processEvents()
 
@@ -1538,30 +1721,20 @@ class MainWindow(QMainWindow):
             # Store state before applying destructively
             self._store_previous_state()
 
-            manager = None
             modified_image = None
 
-            if preset_type == 'film':
-                manager = self.film_preset_manager
-                if hasattr(manager, 'apply_preset'): # Check if method exists
-                     # Film preset apply needs the full preset data dictionary
-                     preset_data = manager.get_preset(preset_id)
-                     if preset_data:
-                         # Use keyword arguments for clarity and robustness
-                         modified_image = manager.apply_preset(image=self.base_image, preset=preset_data, intensity=intensity, grain_scale=grain_scale)
-                     else:
-                         raise ValueError(f"Film preset '{preset_id}' not found.")
-                else:
-                     raise AttributeError("FilmPresetManager does not have 'apply_preset' method.")
-
-            elif preset_type == 'photo':
-                manager = self.photo_preset_manager
-                if hasattr(manager, 'apply_photo_preset'): # Check if method exists
-                    modified_image = manager.apply_photo_preset(self.base_image, preset_id, intensity)
-                else:
-                    raise AttributeError("PhotoPresetManager does not have 'apply_photo_preset' method.")
+            if preset_type in ("film", "photo"):
+                modified_image = self.conversion_service.apply_preset(
+                    self.base_image,
+                    PresetInfo(
+                        type=preset_type,
+                        id=preset_id,
+                        intensity=float(intensity),
+                        grain_scale=grain_scale,
+                    ),
+                )
             else:
-                 raise ValueError(f"Unknown preset type '{preset_type}' for apply.")
+                raise ValueError(f"Unknown preset type '{preset_type}' for apply.")
 
 
             if modified_image is not None:
@@ -1619,7 +1792,7 @@ class MainWindow(QMainWindow):
         )
 
         if ok and new_type != current_type:
-            print(f"User selected new negative type override: {new_type}")
+            logger.info("User selected new negative type override: %s", new_type)
             # Map UI selection to backend override value (None for Auto)
             override_value = new_type if new_type != "Auto" else None
             # Trigger re-conversion with the selected override
@@ -1635,7 +1808,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Initial conversion already in progress.", 3000)
             return
 
-        print(f"Requesting re-conversion with override type: {override_type}")
+        logger.info("Requesting re-conversion with override type: %s", override_type)
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor) # Set busy cursor
         self.statusBar().showMessage(f"Re-converting with type: {override_type}...", 0) # Persistent message
         self._is_converting_initial = True
@@ -1649,7 +1822,7 @@ class MainWindow(QMainWindow):
         dialog = SettingsDialog(self)
         if dialog.exec():
             # Settings were saved successfully by the dialog's accept() method
-            print("Settings dialog accepted.") # Log or status update
+            logger.info("Settings dialog accepted.")
             # Reload settings that can be applied dynamically (UI, Logging Level)
             try:
                 app_settings.reload_settings()
@@ -1657,12 +1830,12 @@ class MainWindow(QMainWindow):
                 # Trigger updates in components that use reloaded settings
                 self.filmstrip_widget.update_thumbnail_size() # Update filmstrip thumbnails
             except Exception as e:
-                print(f"Error reloading settings: {e}") # Log this
+                logger.exception("Error reloading settings")
                 self.statusBar().showMessage("Settings saved, but failed to reload dynamically.", 5000)
                 QMessageBox.warning(self, "Reload Warning", f"Settings were saved, but an error occurred during dynamic reload:\n{e}\n\nA restart might be needed for all changes to take effect.")
         else:
             # Settings dialog was cancelled
-            print("Settings dialog cancelled.") # Log or status update
+            logger.info("Settings dialog cancelled.")
             self.statusBar().showMessage("Settings changes cancelled.", 3000)
 
 
@@ -1676,7 +1849,7 @@ def main():
     # by any component (e.g., MainWindow indirectly).
     # The level is determined by 'config.settings.LOGGING_LEVEL'.
     # We can optionally add a print statement here to confirm the level used.
-    print(f"Logging level set to: {app_settings.LOGGING_LEVEL} (via config/settings.py)")
+    logger.info("Logging level set to: %s (via config/settings.py)", app_settings.LOGGING_LEVEL)
 
     # Create the Qt Application
     app = QApplication(sys.argv)

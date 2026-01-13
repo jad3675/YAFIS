@@ -5,6 +5,10 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBo
 from PyQt6.QtCore import pyqtSignal, QPointF, QRectF, Qt
 from PyQt6.QtGui import QPainter, QPen, QBrush, QColor, QPolygonF, QPainterPath
 
+from negative_converter.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 class CurveGraphWidget(QWidget):
     """Custom widget to display and interact with a curve."""
     points_changed = pyqtSignal(list) # Emits the list of points [[x,y], ...]
@@ -35,7 +39,7 @@ class CurveGraphWidget(QWidget):
             self._points = sorted(valid_points, key=lambda p: p[0])
             self.update() # Trigger repaint
         else:
-            print("Warning: Invalid points format for CurveGraphWidget.")
+            logger.warning("Invalid points format for CurveGraphWidget.")
 
     def get_points(self):
         """Return the current list of control points."""
@@ -227,13 +231,13 @@ class CurvesWidget(QWidget):
     def channel_changed(self, channel_name):
         """Handle channel selection change."""
         self._current_channel = channel_name
-        print(f"Curves channel changed to: {self._current_channel}")
+        logger.info("Curves channel changed to: %s", self._current_channel)
         # Update graph display to show the curve for the selected channel
         self.graph_widget.set_points(self._curve_points[self._current_channel])
 
     def reset_current_curve(self):
         """Reset the points for the currently selected channel."""
-        print(f"Resetting curve for channel: {self._current_channel}")
+        logger.info("Resetting curve for channel: %s", self._current_channel)
         default_points = [[0, 0], [255, 255]]
         self._curve_points[self._current_channel] = default_points
         self.graph_widget.set_points(default_points) # Update graph
@@ -263,9 +267,9 @@ class CurvesWidget(QWidget):
                 if channel == self._current_channel:
                     self.graph_widget.set_points(self._curve_points[channel]) # Update graph
             else:
-                print(f"Warning: Invalid points format for setting curve '{channel}'.")
+                logger.warning("Invalid points format for setting curve '%s'.", channel)
         else:
-            print(f"Warning: Invalid channel '{channel}' for setting curve points.")
+            logger.warning("Invalid channel '%s' for setting curve points.", channel)
 
 
 # Example usage (for testing standalone)

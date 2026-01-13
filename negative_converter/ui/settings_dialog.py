@@ -2,13 +2,17 @@ import sys
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QTabWidget, QWidget, QFormLayout,
     QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QPushButton, QDialogButtonBox,
-    QLabel, QMessageBox
+    QLabel, QMessageBox, QCheckBox
 )
 from PyQt6.QtCore import Qt
+
+from negative_converter.utils.logger import get_logger
 
 # Import the settings and the save function using relative import
 # Go up one level from 'ui' to 'negative_converter', then down to 'config'
 from ..config import settings as app_settings
+
+logger = get_logger(__name__)
 
 class SettingsDialog(QDialog):
     def __init__(self, parent=None):
@@ -187,6 +191,10 @@ class SettingsDialog(QDialog):
         self.filmstrip_thumb_size.setSuffix(" px")
         layout.addRow("Filmstrip Thumbnail Size:", self.filmstrip_thumb_size)
 
+        self.apply_embedded_icc_profile = QCheckBox()
+        self.apply_embedded_icc_profile.setToolTip("If enabled, convert images with embedded ICC profiles into sRGB when loading.")
+        layout.addRow("Apply embedded ICC profile (convert to sRGB):", self.apply_embedded_icc_profile)
+
     def _create_system_tab(self):
         layout = QFormLayout(self.system_tab)
 
@@ -204,15 +212,15 @@ class SettingsDialog(QDialog):
             elif category == "UI":
                 return app_settings.UI_DEFAULTS.get(key, default_value)
             elif category == "LOGGING":
-                return app_settings.LOGGING_LEVEL # Direct access for logging level
+                return app_settings.LOGGING_LEVEL  # Direct access for logging level
             else:
                 return default_value
         except KeyError:
-            print(f"Warning: Setting key '{key}' not found in '{category}' defaults.")
+            logger.warning("Setting key '%s' not found in '%s' defaults.", key, category)
             return default_value
         except AttributeError:
-             print(f"Warning: Settings category '{category}' not found.")
-             return default_value
+            logger.warning("Settings category '%s' not found.", category)
+            return default_value
 
     def load_settings(self):
         """Load current settings into the UI widgets."""
@@ -247,6 +255,7 @@ class SettingsDialog(QDialog):
         self.default_jpeg_quality.setValue(self._get_setting("UI", "default_jpeg_quality", 95))
         self.default_png_compression.setValue(self._get_setting("UI", "default_png_compression", 6))
         self.filmstrip_thumb_size.setValue(self._get_setting("UI", "filmstrip_thumb_size", 120))
+        self.apply_embedded_icc_profile.setChecked(bool(self._get_setting("UI", "apply_embedded_icc_profile", False)))
 
         # System Tab
         current_level = self._get_setting("LOGGING", "LOGGING_LEVEL", "INFO")
@@ -300,6 +309,7 @@ class SettingsDialog(QDialog):
                     "default_jpeg_quality": self.default_jpeg_quality.value(),
                     "default_png_compression": self.default_png_compression.value(),
                     "filmstrip_thumb_size": self.filmstrip_thumb_size.value(),
+                    "apply_embedded_icc_profile": self.apply_embedded_icc_profile.isChecked(),
                 },
                 "LOGGING_LEVEL": self.logging_level.currentText()
             }
@@ -313,14 +323,19 @@ class SettingsDialog(QDialog):
 
 
             if app_settings.save_user_settings(settings_to_save):
-                QMessageBox.information(self, "Settings Saved", "Settings have been saved successfully.\nSome changes may require an application restart.")
-                super().accept() # Close the dialog
+                QMessageBox.information(
+                    self,
+                    "Settings Saved",
+                    "Settings have been saved successfully.\nSome changes may require an application restart.",
+                )
+                super().accept()  # Close the dialog
             else:
                 QMessageBox.warning(self, "Save Error", "Could not save settings to the file.")
                 # Keep dialog open
 
-        except Exception as e:
-            QMessageBox.critical(self, "Error Saving Settings", f"An unexpected error occurred: {e}")
+        except Exception:
+            logger.exception("Unexpected error while saving settings.")
+            QMessageBox.critical(self, "Error Saving Settings", "An unexpected error occurred while saving settings.")
             # Keep dialog open
 
 
@@ -330,7 +345,7 @@ if __name__ == '__main__':
     app = QApplication(sys.argv)
     dialog = SettingsDialog()
     if dialog.exec():
-        print("Settings dialog accepted (saved).")
+        logger.info("Settings dialog accepted (saved).")
     else:
-        print("Settings dialog cancelled.")
+        logger.info("Settings dialog cancelled.")
     sys.exit()

@@ -1,12 +1,31 @@
 # Adjustment controls
 import copy # Added for deep copying defaults
-from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider, QSpinBox, QComboBox,
-                             QDoubleSpinBox, QSizePolicy, QGroupBox, QFormLayout, QPushButton) # Added QPushButton
+from PyQt6.QtWidgets import (
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QSlider,
+    QSpinBox,
+    QComboBox,
+    QDoubleSpinBox,
+    QSizePolicy,
+    QGroupBox,
+    QFormLayout,
+    QPushButton,
+    QMessageBox,
+    QInputDialog,
+)
 from PyQt6.QtCore import Qt, pyqtSignal, QSize
 from PyQt6.QtGui import QIcon
 
+from negative_converter.utils.logger import get_logger
+from negative_converter.processing.adjustment_presets import AdjustmentPresetManager
+
 # Import the placeholder curves widget
 from .curves_widget import CurvesWidget
+
+logger = get_logger(__name__)
 
 class AdjustmentPanel(QWidget):
     """Panel for basic image adjustments."""
@@ -103,6 +122,12 @@ class AdjustmentPanel(QWidget):
             ]
         }
 
+        self._pending_changed_keys = set()
+
+        # --- Adjustment Presets ---
+        self._preset_manager = AdjustmentPresetManager()
+        self._preset_id_by_name = {}
+
         self.setup_ui()
         self._update_all_group_titles() # Set initial titles correctly
         self._update_history_buttons_state() # Set initial button state
@@ -136,6 +161,44 @@ class AdjustmentPanel(QWidget):
 
         main_layout.addLayout(top_button_layout)
         # --- End Top Buttons ---
+
+        # --- Adjustment Presets (Save/Apply/Delete) ---
+        presets_group = QGroupBox("Adjustment Presets")
+        presets_group.setCheckable(True)
+        presets_group.setChecked(True)
+
+        presets_content = QWidget()
+        presets_layout = QHBoxLayout(presets_content)
+        presets_layout.setContentsMargins(10, 5, 10, 10)
+        presets_layout.setSpacing(8)
+
+        self.adjustment_preset_combo = QComboBox()
+        self.adjustment_preset_combo.setToolTip("Select an adjustment preset to apply.")
+        presets_layout.addWidget(self.adjustment_preset_combo, 1)
+
+        self.apply_adjustment_preset_button = QPushButton("Apply")
+        self.apply_adjustment_preset_button.setToolTip("Apply the selected adjustment preset (updates preview immediately).")
+        self.apply_adjustment_preset_button.clicked.connect(self._on_apply_adjustment_preset_clicked)
+        presets_layout.addWidget(self.apply_adjustment_preset_button)
+
+        self.save_adjustment_preset_button = QPushButton("Save…")
+        self.save_adjustment_preset_button.setToolTip("Save the current adjustment settings as a new preset.")
+        self.save_adjustment_preset_button.clicked.connect(self._on_save_adjustment_preset_clicked)
+        presets_layout.addWidget(self.save_adjustment_preset_button)
+
+        self.delete_adjustment_preset_button = QPushButton("Delete")
+        self.delete_adjustment_preset_button.setToolTip("Delete the selected adjustment preset.")
+        self.delete_adjustment_preset_button.clicked.connect(self._on_delete_adjustment_preset_clicked)
+        presets_layout.addWidget(self.delete_adjustment_preset_button)
+
+        presets_group_layout = QVBoxLayout(presets_group)
+        presets_group_layout.setContentsMargins(0, 15, 0, 0)
+        presets_group_layout.addWidget(presets_content)
+        presets_group.toggled.connect(presets_content.setVisible)
+        main_layout.addWidget(presets_group)
+
+        self._refresh_adjustment_preset_list()
+        # --- End Adjustment Presets ---
 
         # --- Basic Adjustments Group ---
         basic_group = QGroupBox("Basic Adjustments")
@@ -187,7 +250,7 @@ class AdjustmentPanel(QWidget):
         # Icon loading failed or is unavailable, use text fallback
         self.wb_picker_button.setText("WB Pick")
         # Optional: Keep the warning or remove it if the text button is acceptable
-        print("Warning: Icon for WB button not found or loaded. Using text fallback.")
+        logger.warning("Icon for WB button not found or loaded. Using text fallback.")
 
         self.wb_picker_button.setToolTip("Pick White Balance point from image")
         # self.wb_picker_button.setFixedSize(QSize(24, 24)) # REMOVE fixed size
@@ -434,6 +497,8 @@ class AdjustmentPanel(QWidget):
         slider.setTickInterval((max_val - min_val) // 10 if (max_val - min_val) > 0 else 1)
         # Connect the callback AFTER setting the initial value
         slider.valueChanged.connect(callback)
+        # Avoid log spam while dragging: log when user releases slider
+        slider.sliderReleased.connect(self._flush_pending_changes)
         slider.mouseDoubleClickEvent = lambda event, s=slider, v=default_val: s.setValue(v)
         slider.setToolTip(f"Adjust value ({min_val} to {max_val}). Double-click to reset.")
         return slider
@@ -502,20 +567,32 @@ class AdjustmentPanel(QWidget):
         # Emit signal so main window knows adjustments changed
         self.adjustment_changed.emit(self._current_adjustments)
 
+    def _mark_pending_change(self, key):
+        self._pending_changed_keys.add(key)
+
+    def _flush_pending_changes(self):
+        if not self._pending_changed_keys:
+            return
+        keys = sorted(self._pending_changed_keys)
+        self._pending_changed_keys.clear()
+
+        snapshot = {k: self._current_adjustments.get(k) for k in keys}
+        logger.info("Adjustment change committed: %s", snapshot)
+
     # --- Signal Emitters for Basic Adjustments ---
-    def _on_brightness_change(self, value): self._push_state_to_undo_stack(); self.brightness_label.setText(str(value)); self._current_adjustments['brightness'] = value; self.adjustment_changed.emit(self._current_adjustments); self._check_and_update_group_title('basic')
-    def _on_contrast_change(self, value): self._push_state_to_undo_stack(); self.contrast_label.setText(str(value)); self._current_adjustments['contrast'] = value; self.adjustment_changed.emit(self._current_adjustments); self._check_and_update_group_title('basic')
-    def _on_saturation_change(self, value): self._push_state_to_undo_stack(); self.saturation_label.setText(str(value)); self._current_adjustments['saturation'] = value; self.adjustment_changed.emit(self._current_adjustments); self._check_and_update_group_title('basic')
-    def _on_hue_change(self, value): self._push_state_to_undo_stack(); self.hue_label.setText(str(value)); self._current_adjustments['hue'] = value; self.adjustment_changed.emit(self._current_adjustments); self._check_and_update_group_title('basic')
-    def _on_temp_change(self, value): self._push_state_to_undo_stack(); self.temp_label.setText(str(value)); self._current_adjustments['temp'] = value; self.adjustment_changed.emit(self._current_adjustments); self._check_and_update_group_title('basic')
-    def _on_tint_change(self, value): self._push_state_to_undo_stack(); self.tint_label.setText(str(value)); self._current_adjustments['tint'] = value; self.adjustment_changed.emit(self._current_adjustments); self._check_and_update_group_title('basic')
+    def _on_brightness_change(self, value): self._push_state_to_undo_stack(); self.brightness_label.setText(str(value)); self._current_adjustments['brightness'] = value; self._mark_pending_change('brightness'); self.adjustment_changed.emit(self._current_adjustments); self._check_and_update_group_title('basic')
+    def _on_contrast_change(self, value): self._push_state_to_undo_stack(); self.contrast_label.setText(str(value)); self._current_adjustments['contrast'] = value; self._mark_pending_change('contrast'); self.adjustment_changed.emit(self._current_adjustments); self._check_and_update_group_title('basic')
+    def _on_saturation_change(self, value): self._push_state_to_undo_stack(); self.saturation_label.setText(str(value)); self._current_adjustments['saturation'] = value; self._mark_pending_change('saturation'); self.adjustment_changed.emit(self._current_adjustments); self._check_and_update_group_title('basic')
+    def _on_hue_change(self, value): self._push_state_to_undo_stack(); self.hue_label.setText(str(value)); self._current_adjustments['hue'] = value; self._mark_pending_change('hue'); self.adjustment_changed.emit(self._current_adjustments); self._check_and_update_group_title('basic')
+    def _on_temp_change(self, value): self._push_state_to_undo_stack(); self.temp_label.setText(str(value)); self._current_adjustments['temp'] = value; self._mark_pending_change('temp'); self.adjustment_changed.emit(self._current_adjustments); self._check_and_update_group_title('basic')
+    def _on_tint_change(self, value): self._push_state_to_undo_stack(); self.tint_label.setText(str(value)); self._current_adjustments['tint'] = value; self._mark_pending_change('tint'); self.adjustment_changed.emit(self._current_adjustments); self._check_and_update_group_title('basic')
 
     # --- Signal Emitter for AWB ---
     def _on_awb_apply_clicked(self):
         """Emit signal when Apply Auto WB button is clicked."""
         selected_method_text = self.awb_method_combo.currentText()
         method_key = selected_method_text.lower().replace(' ', '_')
-        print(f"AWB Apply button clicked. Method: {method_key}")
+        logger.debug("AWB apply clicked. method=%s", method_key)
         self.awb_requested.emit(method_key)
         # Auto actions clear panel history via set_adjustments call in MainWindow
 
@@ -525,7 +602,7 @@ class AdjustmentPanel(QWidget):
         selected_mode_display = self.al_colormode_combo.currentText()
         selected_mode_key = self.al_colormode_map.get(selected_mode_display, 'luminance')
         midrange_value = self.al_midrange_spin.value()
-        print(f"Auto Level Apply button clicked. Mode: {selected_mode_key}, Midrange: {midrange_value}")
+        logger.debug("Auto level apply clicked. mode=%s midrange=%s", selected_mode_key, midrange_value)
         self.auto_level_requested.emit(selected_mode_key, midrange_value)
         # Auto actions clear panel history via set_adjustments call in MainWindow
 
@@ -534,14 +611,14 @@ class AdjustmentPanel(QWidget):
         """Emit signal when Apply Auto Color button is clicked."""
         selected_method_display = self.ac_method_combo.currentText()
         selected_method_key = self.ac_method_map.get(selected_method_display, 'gamma')
-        print(f"Auto Color Apply button clicked. Method: {selected_method_key}")
+        logger.debug("Auto color apply clicked. method=%s", selected_method_key)
         self.auto_color_requested.emit(selected_method_key)
         # Auto actions clear panel history via set_adjustments call in MainWindow
 
     # --- Signal Emitter for Auto Tone ---
     def _on_auto_tone_apply_clicked(self):
         """Emit signal when Apply Auto Tone button is clicked."""
-        print(f"Auto Tone Apply button clicked.")
+        logger.debug("Auto tone apply clicked.")
         self.auto_tone_requested.emit()
         # Auto actions clear panel history via set_adjustments call in MainWindow
 
@@ -555,6 +632,14 @@ class AdjustmentPanel(QWidget):
         self._current_adjustments['levels_gamma'] = self.levels_gamma_spin.value()
         self._current_adjustments['levels_out_black'] = self.levels_out_black_spin.value()
         self._current_adjustments['levels_out_white'] = self.levels_out_white_spin.value()
+        logger.info(
+            "Levels changed: in_black=%s in_white=%s gamma=%s out_black=%s out_white=%s",
+            self._current_adjustments['levels_in_black'],
+            self._current_adjustments['levels_in_white'],
+            self._current_adjustments['levels_gamma'],
+            self._current_adjustments['levels_out_black'],
+            self._current_adjustments['levels_out_white'],
+        )
         self.adjustment_changed.emit(self._current_adjustments)
         self._check_and_update_group_title('levels')
 
@@ -724,6 +809,127 @@ class AdjustmentPanel(QWidget):
         for group_key in self.group_boxes.keys():
             self._check_and_update_group_title(group_key)
 
+    def _refresh_adjustment_preset_list(self):
+        """Reload preset list from disk and refresh the combo box."""
+        try:
+            self._preset_manager.load()
+            presets = self._preset_manager.list_presets()
+        except Exception:
+            logger.exception("Failed refreshing adjustment preset list.")
+            presets = []
+
+        self._preset_id_by_name = {}
+        self.adjustment_preset_combo.blockSignals(True)
+        self.adjustment_preset_combo.clear()
+
+        for p in presets:
+            name = p.get("name") or p.get("id")
+            preset_id = p.get("id")
+            if not preset_id:
+                continue
+            self._preset_id_by_name[name] = preset_id
+            self.adjustment_preset_combo.addItem(name)
+
+        self.adjustment_preset_combo.blockSignals(False)
+        self._update_adjustment_preset_buttons_enabled()
+
+    def _selected_adjustment_preset_id(self):
+        name = self.adjustment_preset_combo.currentText()
+        return self._preset_id_by_name.get(name)
+
+    def _update_adjustment_preset_buttons_enabled(self):
+        has_any = self.adjustment_preset_combo.count() > 0
+        self.apply_adjustment_preset_button.setEnabled(has_any)
+        self.delete_adjustment_preset_button.setEnabled(has_any)
+
+    def _on_save_adjustment_preset_clicked(self):
+        """Save current adjustments snapshot as an adjustment preset."""
+        name, ok = QInputDialog.getText(self, "Save Adjustment Preset", "Preset name:")
+        if not ok or not name.strip():
+            return
+
+        preset_id = None  # let manager slugify
+        overwrite = False
+        # If a preset with same slug exists, manager will reject unless overwrite=True.
+        # We'll offer overwrite in that case.
+        success, result = self._preset_manager.add_preset(
+            name=name.strip(),
+            parameters=self.get_adjustments(),
+            preset_id=preset_id,
+            overwrite=False,
+        )
+        if not success and "already exists" in result:
+            reply = QMessageBox.question(
+                self,
+                "Preset Exists",
+                f"{result}. Overwrite?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                success, result = self._preset_manager.add_preset(
+                    name=name.strip(),
+                    parameters=self.get_adjustments(),
+                    preset_id=None,
+                    overwrite=True,
+                )
+
+        if success:
+            logger.info("Saved adjustment preset: %s", result)
+            self._refresh_adjustment_preset_list()
+            # Select the newly saved preset by name if present
+            idx = self.adjustment_preset_combo.findText(name.strip())
+            if idx >= 0:
+                self.adjustment_preset_combo.setCurrentIndex(idx)
+            QMessageBox.information(self, "Preset Saved", f"Adjustment preset '{name.strip()}' saved.")
+        else:
+            QMessageBox.critical(self, "Save Failed", f"Could not save preset: {result}")
+
+    def _on_apply_adjustment_preset_clicked(self):
+        """Apply selected preset to the panel and emit adjustment_changed."""
+        preset_id = self._selected_adjustment_preset_id()
+        if not preset_id:
+            return
+
+        preset = self._preset_manager.get_preset(preset_id)
+        if not preset:
+            QMessageBox.warning(self, "Not Found", f"Preset '{preset_id}' not found. Reloading list.")
+            self._refresh_adjustment_preset_list()
+            return
+
+        params = preset.get("parameters")
+        if not isinstance(params, dict):
+            QMessageBox.critical(self, "Invalid Preset", f"Preset '{preset_id}' has invalid parameters.")
+            return
+
+        # Apply to UI controls and internal state (clear panel undo/redo history via update_history=True).
+        self.set_adjustments(params, update_history=True)
+        # Emit so MainWindow reprocesses immediately.
+        self.adjustment_changed.emit(self.get_adjustments())
+        logger.info("Applied adjustment preset: %s", preset_id)
+
+    def _on_delete_adjustment_preset_clicked(self):
+        preset_id = self._selected_adjustment_preset_id()
+        if not preset_id:
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Delete Preset",
+            f"Delete preset '{preset_id}'?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        ok = self._preset_manager.delete_preset(preset_id)
+        if ok:
+            logger.info("Deleted adjustment preset: %s", preset_id)
+            self._refresh_adjustment_preset_list()
+        else:
+            QMessageBox.critical(self, "Delete Failed", f"Could not delete preset '{preset_id}'.")
+
     # --- Public Methods ---
     def get_adjustments(self):
         """Return the current dictionary of adjustment values."""
@@ -731,7 +937,7 @@ class AdjustmentPanel(QWidget):
 
     def reset_adjustments(self):
         """Reset all adjustment controls and internal state to defaults."""
-        print("Resetting adjustments...")
+        logger.debug("Resetting adjustments to defaults.")
         # Reset internal state using a deep copy of defaults
         self._current_adjustments = copy.deepcopy(self._default_adjustments)
 
@@ -778,7 +984,7 @@ class AdjustmentPanel(QWidget):
 
         # Emit signal with default adjustments
         self.adjustment_changed.emit(self._current_adjustments)
-        print("Adjustments reset.")
+        logger.debug("Adjustments reset complete.")
 
     def set_adjustments(self, adjustments_dict, update_history=True):
         """

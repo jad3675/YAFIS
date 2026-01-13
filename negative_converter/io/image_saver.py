@@ -2,26 +2,23 @@
 import os
 import numpy as np
 
+from negative_converter.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 # Attempt to import Pillow (PIL)
 try:
     from PIL import Image, UnidentifiedImageError
-    # Import ImageCms for potential future profile handling if needed
-    # from PIL import ImageCms
+
     PILLOW_AVAILABLE = True
 except ImportError:
     PILLOW_AVAILABLE = False
-    print("[Image Saver Error] Pillow library not found. Image saving will not work. Install with 'pip install Pillow'")
+    logger.error("Pillow library not found. Image saving will not work. Install with 'pip install Pillow'.")
 
 # Placeholder for sRGB ICC profile bytes
-# TODO: Load a standard sRGB ICC profile from a file or generate one.
-# Example:
-# try:
-#     with open("path/to/sRGB_IEC61966-2-1_black_scaled.icc", "rb") as f:
-#         SRGB_PROFILE_BYTES = f.read()
-# except Exception as e:
-#     print(f"[Image Saver Warning] Could not load sRGB profile: {e}. Images will be saved without an embedded profile.")
-#     SRGB_PROFILE_BYTES = None
-SRGB_PROFILE_BYTES = None # Set to None until profile is available
+# NOTE: Keeping this as None for now (YAGNI). If profile embedding is required,
+# add a small bundled ICC file and load it here.
+SRGB_PROFILE_BYTES = None
 
 def save_image(image_rgb, file_path, quality=95, png_compression=3):
     """Saves the given RGB image to the specified file path using Pillow.
@@ -39,31 +36,39 @@ def save_image(image_rgb, file_path, quality=95, png_compression=3):
         bool: True if saving was successful, False otherwise.
     """
     if not PILLOW_AVAILABLE:
-        print("[Image Saver Error] Cannot save image: Pillow library is not available.")
+        logger.error("Cannot save image: Pillow library is not available.")
         return False
 
     if image_rgb is None or image_rgb.size == 0:
-        print("[Image Saver Error] Cannot save an empty image.")
+        logger.error("Cannot save an empty image.")
         return False
 
     if not isinstance(file_path, str) or not file_path:
-        print("[Image Saver Error] Invalid file path provided for saving.")
+        logger.error("Invalid file path provided for saving.")
         return False
 
     if image_rgb.dtype != np.uint8:
-         print("[Image Saver Warning] Image data type is not uint8. Clipping and converting.")
-         image_rgb = np.clip(image_rgb, 0, 255).astype(np.uint8)
+        logger.warning("Image data type is not uint8. Clipping and converting.")
+        image_rgb = np.clip(image_rgb, 0, 255).astype(np.uint8)
 
     if len(image_rgb.shape) != 3 or image_rgb.shape[2] != 3:
-        print("[Image Saver Error] Image must be in RGB format (3 channels) to save.")
+        logger.error("Image must be in RGB format (3 channels) to save.")
         return False
 
     # Validate quality and compression types
     if not isinstance(quality, int):
-        print(f"[Image Saver Error] Invalid type for quality parameter: expected int, got {type(quality)}. Value: {quality}")
+        logger.error(
+            "Invalid type for quality parameter: expected int, got %s. Value=%s",
+            type(quality),
+            quality,
+        )
         return False
     if not isinstance(png_compression, int):
-        print(f"[Image Saver Error] Invalid type for png_compression parameter: expected int, got {type(png_compression)}. Value: {png_compression}")
+        logger.error(
+            "Invalid type for png_compression parameter: expected int, got %s. Value=%s",
+            type(png_compression),
+            png_compression,
+        )
         return False
 
     # Create the output directory if it doesn't exist
@@ -71,9 +76,9 @@ def save_image(image_rgb, file_path, quality=95, png_compression=3):
     if output_dir and not os.path.exists(output_dir):
         try:
             os.makedirs(output_dir)
-            print(f"[Image Saver Info] Created output directory: {output_dir}")
-        except OSError as e:
-            print(f"[Image Saver Error] Could not create directory '{output_dir}': {e}")
+            logger.info("Created output directory: %s", output_dir)
+        except OSError:
+            logger.exception("Could not create directory '%s'", output_dir)
             return False
 
     try:
@@ -115,31 +120,27 @@ def save_image(image_rgb, file_path, quality=95, png_compression=3):
 
         # Attempt to save the image
         img.save(file_path, **save_kwargs)
-        print(f"Successfully saved image to: '{file_path}'")
+        logger.info("Successfully saved image to: '%s'", file_path)
         return True
 
     except FileNotFoundError:
-        # Should be caught by directory check, but handle defensively
-        print(f"Error: File path not found during save: '{file_path}'")
+        logger.error("File path not found during save: '%s'", file_path)
         return False
-    except UnidentifiedImageError: # Should not happen on save, but include
-         print(f"Error: Pillow could not determine save format for: '{file_path}'")
-         return False
-    except OSError as e:
-        # Catch disk full, permissions errors, etc.
-        print(f"Error: OS error saving image '{file_path}': {e}")
+    except UnidentifiedImageError:
+        logger.error("Pillow could not determine save format for: '%s'", file_path)
         return False
-    except Exception as e:
-        # Catch any other unexpected errors during saving
-        print(f"Error saving image '{file_path}' with Pillow: {e}")
+    except OSError:
+        logger.exception("OS error saving image '%s'", file_path)
+        return False
+    except Exception:
+        logger.exception("Unexpected error saving image '%s' with Pillow.", file_path)
         return False
     finally:
-        # Ensure image object is closed if necessary (though usually handled by save)
         try:
-            if 'img' in locals() and hasattr(img, 'close'):
+            if "img" in locals() and hasattr(img, "close"):
                 img.close()
-        except Exception as close_e:
-             print(f"Error closing image object during save: {close_e}")
+        except Exception:
+            logger.exception("Error closing image object during save.")
 
 
 # TODO: Add metadata preservation if needed (requires external library like piexif or Pillow's EXIF handling)

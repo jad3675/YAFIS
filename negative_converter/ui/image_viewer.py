@@ -1,9 +1,12 @@
 # Image display widget
 import numpy as np
 from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout, QSizePolicy, QScrollArea, QRubberBand
-from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtGui import QImage, QPixmap, QPainter
 from PyQt6.QtCore import Qt, QSize, QPoint, QRect, pyqtSignal
 from PyQt6.QtGui import QCursor # Added for cursor change
+
+from ..utils.logger import get_logger
+logger = get_logger(__name__)
 
 class ImageViewer(QWidget):
     """Widget to display an image using QLabel, with zoom, pan, and color picking."""
@@ -20,6 +23,11 @@ class ImageViewer(QWidget):
         self._drag_start_pos = None
         self._picker_mode_active = False
         self._display_mode = 'after' # 'after' or 'before'
+
+        # Wipe compare state (0..100). 0=all before, 100=all after.
+        self._compare_wipe_percent = 100
+        self._compare_wipe_enabled = False
+
         self.setup_ui()
 
     def setup_ui(self):
@@ -68,7 +76,7 @@ class ImageViewer(QWidget):
             return
 
         if not isinstance(image_np, np.ndarray) or image_np.dtype != np.uint8:
-            print("Error: Image must be a NumPy array of type uint8.")
+            logger.error("Image must be a NumPy array of type uint8.")
             # Optionally clear or show an error message
             self._pixmap = None
             self._before_pixmap = None # Clear before state too
@@ -86,7 +94,7 @@ class ImageViewer(QWidget):
             q_image = QImage(image_np.data, width, height, bytes_per_line, QImage.Format.Format_RGB888)
 
             if q_image.isNull():
-                print("Error: Failed to create QImage from NumPy array.")
+                logger.error("Failed to create QImage from NumPy array.")
                 self._pixmap = None
                 self._before_pixmap = None # Clear before state too
                 self._display_mode = 'after' # Reset mode
@@ -104,7 +112,7 @@ class ImageViewer(QWidget):
             self.fit_to_window() # Fit new image to window by default
 
         except Exception as e:
-            print(f"Error converting NumPy array to QPixmap: {e}")
+            logger.exception("Error converting NumPy array to QPixmap")
             self._pixmap = None
             self._before_pixmap = None # Clear before state too
             self._display_mode = 'after' # Reset mode
@@ -116,40 +124,97 @@ class ImageViewer(QWidget):
 
 
     def _update_display(self):
-        """Updates the QLabel with the correct pixmap (before/after) scaled by the current zoom factor."""
-        pixmap_to_display = self._before_pixmap if self._display_mode == 'before' else self._pixmap
-        if pixmap_to_display is None or pixmap_to_display.isNull():
-            self.image_label.clear()
-            if self._pixmap is None:
-                # Show appropriate message if trying to view 'before' but it's not set
-                if self._display_mode == 'before' and self._before_pixmap is None:
-                     self.image_label.setText("No 'Before' Image Stored")
-                else:
-                     self.image_label.setText("No Image Loaded")
-                self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            # Ensure label takes minimal size when cleared
-            self.image_label.resize(0, 0)
+        """Updates the QLabel pixmap scaled by zoom.
+
+        If wipe compare is enabled and a before-image exists, renders a composite:
+        left side = before, right side = after (based on _compare_wipe_percent).
+        """
+        after_pixmap = self._pixmap
+        before_pixmap = self._before_pixmap
+
+        # Determine what we need to display (single or composite)
+        use_wipe = bool(self._compare_wipe_enabled and after_pixmap is not None and before_pixmap is not None)
+
+        if not use_wipe:
+            pixmap_to_display = before_pixmap if self._display_mode == 'before' else after_pixmap
+            if pixmap_to_display is None or pixmap_to_display.isNull():
+                self.image_label.clear()
+                if self._pixmap is None:
+                    # Show appropriate message if trying to view 'before' but it's not set
+                    if self._display_mode == 'before' and self._before_pixmap is None:
+                        self.image_label.setText("No 'Before' Image Stored")
+                    else:
+                        self.image_label.setText("No Image Loaded")
+                    self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                # Ensure label takes minimal size when cleared
+                self.image_label.resize(0, 0)
+                return
+
+            # Scale the original pixmap by the zoom factor
+            original_size = pixmap_to_display.size()
+            scaled_size = QSize(int(original_size.width() * self._zoom_factor),
+                                int(original_size.height() * self._zoom_factor))
+
+            # Ensure minimum size of 1x1 pixel for the pixmap
+            scaled_size.setWidth(max(1, scaled_size.width()))
+            scaled_size.setHeight(max(1, scaled_size.height()))
+
+            scaled_pixmap = pixmap_to_display.scaled(
+                scaled_size,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+
+            self.image_label.setPixmap(scaled_pixmap)
+            self.image_label.resize(scaled_pixmap.size())
             return
 
-        # Scale the original pixmap by the zoom factor
-        original_size = pixmap_to_display.size()
+        # --- Wipe compare composite render ---
+        # Scale both pixmaps to the same target size (based on after pixmap size).
+        original_size = after_pixmap.size()
         scaled_size = QSize(int(original_size.width() * self._zoom_factor),
                             int(original_size.height() * self._zoom_factor))
-
-        # Ensure minimum size of 1x1 pixel for the pixmap
         scaled_size.setWidth(max(1, scaled_size.width()))
         scaled_size.setHeight(max(1, scaled_size.height()))
 
-        scaled_pixmap = pixmap_to_display.scaled(scaled_size,
-                                            Qt.AspectRatioMode.KeepAspectRatio, # Keep aspect ratio
-                                            Qt.TransformationMode.SmoothTransformation) # Use smooth scaling
+        scaled_after = after_pixmap.scaled(
+            scaled_size,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        scaled_before = before_pixmap.scaled(
+            scaled_after.size(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
 
-        self.image_label.setPixmap(scaled_pixmap)
-        # Resize the label to match the scaled pixmap exactly
-        # This allows the scroll area to function correctly
-        self.image_label.resize(scaled_pixmap.size())
-        # Alignment is less critical now as the label fits the pixmap
-        # self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        composite = QPixmap(scaled_after.size())
+        composite.fill(Qt.GlobalColor.black)
+
+        p = QPainter(composite)
+        try:
+            # Start with before everywhere
+            p.drawPixmap(0, 0, scaled_before)
+
+            # Then draw after on the right side according to the wipe percentage
+            wipe_pct = float(max(0, min(100, self._compare_wipe_percent)))
+            wipe_x = int((wipe_pct / 100.0) * scaled_after.width())
+
+            if wipe_x > 0:
+                after_rect = QRect(0, 0, wipe_x, scaled_after.height())
+                p.setClipRect(after_rect)
+                p.drawPixmap(0, 0, scaled_after)
+                p.setClipping(False)
+
+            # Optional: divider line for visibility
+            divider_x = max(0, min(scaled_after.width() - 1, wipe_x))
+            p.setPen(Qt.GlobalColor.white)
+            p.drawLine(divider_x, 0, divider_x, scaled_after.height())
+        finally:
+            p.end()
+
+        self.image_label.setPixmap(composite)
+        self.image_label.resize(composite.size())
 
     # --- Comparison Methods ---
 
@@ -157,7 +222,7 @@ class ImageViewer(QWidget):
         """Stores the current state as the 'before' image for comparison."""
         if image_np is None:
             self._before_pixmap = None
-            print("Cleared 'before' image.")
+            logger.debug("Cleared 'before' image.")
             return
 
         # Convert NumPy to QPixmap (similar to set_image)
@@ -167,29 +232,34 @@ class ImageViewer(QWidget):
             q_image = QImage(image_np.data, width, height, bytes_per_line, QImage.Format.Format_RGB888)
             if not q_image.isNull():
                 self._before_pixmap = QPixmap.fromImage(q_image)
-                print("Stored 'before' image for comparison.")
+                logger.debug("Stored 'before' image for comparison.")
             else:
                 self._before_pixmap = None
-                print("Error creating QImage for 'before' state.")
+                logger.error("Error creating QImage for 'before' state.")
         except Exception as e:
             self._before_pixmap = None
-            print(f"Error storing 'before' image: {e}")
+            logger.exception("Error storing 'before' image")
 
     def toggle_compare_mode(self):
-        """Toggles the display between 'before' and 'after' states."""
+        """Toggles the display between 'before' and 'after' states.
+
+        Note: if wipe compare is enabled, toggling is ignored to avoid conflicting modes.
+        """
         if self._pixmap is None: # No image loaded
+            return
+        if self._compare_wipe_enabled:
             return
 
         if self._display_mode == 'after':
             if self._before_pixmap is not None:
                 self._display_mode = 'before'
-                print("Displaying 'before' image.")
+                logger.debug("Displaying 'before' image.")
             else:
-                print("Cannot switch to 'before': No 'before' image stored.")
+                logger.debug("Cannot switch to 'before': no 'before' image stored.")
                 return # Stay in 'after' mode
         else: # Currently 'before'
             self._display_mode = 'after'
-            print("Displaying 'after' image.")
+            logger.debug("Displaying 'after' image.")
 
         self._update_display()
         self.display_mode_changed.emit(self._display_mode) # Emit signal after mode change
@@ -197,6 +267,23 @@ class ImageViewer(QWidget):
     def has_before_image(self):
         """Returns True if a 'before' image is currently stored."""
         return self._before_pixmap is not None
+
+    # --- Wipe Compare API (toolbar slider drives this) ---
+
+    def set_compare_wipe_enabled(self, enabled: bool):
+        """Enable/disable wipe compare composite rendering."""
+        self._compare_wipe_enabled = bool(enabled)
+        if self._compare_wipe_enabled:
+            # Wipe view implies "after" is visible somewhere.
+            self._display_mode = 'after'
+            self.display_mode_changed.emit(self._display_mode)
+        self._update_display()
+
+    def set_compare_wipe_percent(self, percent: int):
+        """Set wipe position: 0..100 (0=before, 100=after)."""
+        self._compare_wipe_percent = int(max(0, min(100, percent)))
+        if self._compare_wipe_enabled:
+            self._update_display()
 
     # Removed resizeEvent handler - resizing the window no longer changes zoom level.
     # The QScrollArea handles the view of the potentially larger QLabel.
@@ -394,17 +481,17 @@ class ImageViewer(QWidget):
         """Activates color picker mode."""
         pixmap_to_display = self._before_pixmap if self._display_mode == 'before' else self._pixmap
         if pixmap_to_display is None:
-            print("Cannot enter picker mode: No image loaded.")
+            logger.debug("Cannot enter picker mode: no image loaded.")
             return
         self._picker_mode_active = True
         self._update_cursor()
-        print("Picker mode entered.")
+        logger.debug("Picker mode entered.")
 
     def exit_picker_mode(self):
         """Deactivates color picker mode."""
         self._picker_mode_active = False
         self._update_cursor()
-        print("Picker mode exited.")
+        logger.debug("Picker mode exited.")
 
     def _update_cursor(self):
         """Sets the cursor based on the current mode."""
@@ -425,7 +512,7 @@ class ImageViewer(QWidget):
         # 2. Check if click is within the displayed pixmap bounds
         current_pixmap = self.image_label.pixmap()
         if not current_pixmap or current_pixmap.isNull() or not current_pixmap.rect().contains(label_pos):
-            print("Picker click outside image bounds.")
+            logger.debug("Picker click outside image bounds.")
             self.exit_picker_mode() # Exit mode if clicked outside
             return
 
@@ -442,7 +529,7 @@ class ImageViewer(QWidget):
             # 6. Sample the color
             color = original_image.pixelColor(original_x, original_y)
             rgb_tuple = (color.red(), color.green(), color.blue())
-            print(f"Sampled color at ({original_x}, {original_y}): {rgb_tuple}")
+            logger.debug("Sampled color at (%s, %s): %s", original_x, original_y, rgb_tuple)
 
             # 7. Emit the signal
             self.color_sampled.emit(rgb_tuple)
@@ -450,7 +537,7 @@ class ImageViewer(QWidget):
             # 8. Exit picker mode after successful sample
             self.exit_picker_mode()
         else:
-            print(f"Calculated original coordinates ({original_x}, {original_y}) out of bounds.")
+            logger.debug("Calculated original coordinates (%s, %s) out of bounds.", original_x, original_y)
             self.exit_picker_mode() # Exit mode if calculation is wrong
 
 # Example usage (for testing standalone)

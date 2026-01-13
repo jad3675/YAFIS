@@ -1,55 +1,30 @@
 # Image adjustment operations
 import numpy as np
 import cv2
-import cv2.xphoto as xphoto # Import the extended photo module
-try:
-    import cupy as cp
-    # Check if CUDA is available and a device is accessible
-    try:
-        cp.cuda.runtime.getDeviceCount()
-        GPU_ENABLED = True
-        print("[Adjustments Info] CuPy found and GPU detected. GPU acceleration enabled for applicable functions.")
-    except cp.cuda.runtime.CUDARuntimeError:
-        GPU_ENABLED = False
-        print("[Adjustments Warning] CuPy found but no compatible CUDA GPU detected or driver issue. Using CPU.")
-except ImportError:
-    print("[Adjustments Warning] CuPy not found. Install CuPy (e.g., 'pip install cupy-cudaXXX' where XXX is your CUDA version) for GPU acceleration. Using CPU.")
-    GPU_ENABLED = False
+import cv2.xphoto as xphoto  # Import the extended photo module
 
-# Import the new utility function
-# Use relative import assuming utils is at the same level as processing parent
-import sys
-import os
-# Add parent directory to sys.path if running directly or structure requires it
-# This might be needed depending on how the project is run.
-# sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-try:
-    # Try relative import first (common case when run as part of the package)
-    from ..utils.imaging import apply_curve
-except ImportError:
-    # Fallback if running script directly or structure differs
-    # This assumes 'utils' is in the parent directory of 'processing'
-    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-    try:
-        from utils.imaging import apply_curve
-    except ImportError as e:
-        print(f"Error importing apply_curve: {e}. Ensure utils/imaging.py exists and parent directory is accessible.")
-        # Define a dummy function to avoid NameError later if import fails catastrophically
-        def apply_curve(image_channel, curve_points):
-            print("ERROR: apply_curve utility function could not be imported!")
-            return image_channel
+from negative_converter.utils.gpu import GPU_ENABLED, xp, cp_module as cp
+from negative_converter.utils.logger import get_logger
+from negative_converter.utils.imaging import apply_curve
+
+logger = get_logger(__name__)
 
 # Import Preset Managers (needed for apply_all_adjustments)
 try:
     from .film_simulation import FilmPresetManager
     from .photo_presets import PhotoPresetManager
+
     PRESET_MANAGERS_AVAILABLE = True
 except ImportError:
-    print("[Adjustments Warning] Could not import Preset Managers. Preset previews will not work.")
+    logger.warning("Could not import Preset Managers. Preset previews will not work.")
     PRESET_MANAGERS_AVAILABLE = False
+
     # Define dummy classes if needed downstream, though apply_all_adjustments will check the flag
-    class FilmPresetManager: pass
-    class PhotoPresetManager: pass
+    class FilmPresetManager:  # noqa: D401
+        pass
+
+    class PhotoPresetManager:  # noqa: D401
+        pass
 
 # --- Helper Function (Now uses the utility) ---
 def _apply_tone_curve_channel(image_channel, curve_points):
@@ -86,10 +61,16 @@ class ImageAdjustments:
             result_arr = img_arr + brightness_offset
             result_arr = xp.clip(result_arr, 0, 255)
             return xp.asnumpy(result_arr).astype(np.uint8) if GPU_ENABLED else result_arr.astype(np.uint8)
-        except Exception as e:
-            print(f"[Adjustments Error] Brightness failed ({'GPU' if GPU_ENABLED else 'CPU'}): {e}. Falling back.")
-            if GPU_ENABLED: xp = np; img_arr = image.astype(xp.float32); result_arr = img_arr + brightness_offset; return xp.clip(result_arr, 0, 255).astype(np.uint8)
-            else: return image.copy()
+        except Exception:
+            logger.exception(
+                "Brightness failed (%s). Falling back to CPU.",
+                "GPU" if GPU_ENABLED else "CPU",
+            )
+            if GPU_ENABLED:
+                img_arr_cpu = image.astype(np.float32)
+                result_arr_cpu = img_arr_cpu + brightness_offset
+                return np.clip(result_arr_cpu, 0, 255).astype(np.uint8)
+            return image.copy()
 
     @staticmethod
     def adjust_contrast(image, value):
@@ -106,10 +87,16 @@ class ImageAdjustments:
             result_arr = factor * (img_arr - mean_gray) + mean_gray
             result_arr = xp.clip(result_arr, 0, 255)
             return xp.asnumpy(result_arr).astype(np.uint8) if GPU_ENABLED else result_arr.astype(np.uint8)
-        except Exception as e:
-            print(f"[Adjustments Error] Contrast failed ({'GPU' if GPU_ENABLED else 'CPU'}): {e}. Falling back.")
-            if GPU_ENABLED: xp = np; img_arr = image.astype(xp.float32); result_arr = factor * (img_arr - mean_gray) + mean_gray; return xp.clip(result_arr, 0, 255).astype(np.uint8)
-            else: return image.copy()
+        except Exception:
+            logger.exception(
+                "Contrast failed (%s). Falling back to CPU.",
+                "GPU" if GPU_ENABLED else "CPU",
+            )
+            if GPU_ENABLED:
+                img_arr_cpu = image.astype(np.float32)
+                result_arr_cpu = factor * (img_arr_cpu - mean_gray) + mean_gray
+                return np.clip(result_arr_cpu, 0, 255).astype(np.uint8)
+            return image.copy()
 
     @staticmethod
     def adjust_saturation(image, value):
@@ -137,13 +124,24 @@ class ImageAdjustments:
         else: xp = np; img_arr = image.astype(xp.float32)
         try:
             result_arr = img_arr.copy()
-            result_arr[..., 0] += temp_factor; result_arr[..., 2] -= temp_factor; result_arr[..., 1] -= tint_factor
+            result_arr[..., 0] += temp_factor
+            result_arr[..., 2] -= temp_factor
+            result_arr[..., 1] -= tint_factor
             result_arr = xp.clip(result_arr, 0, 255)
             return xp.asnumpy(result_arr).astype(np.uint8) if GPU_ENABLED else result_arr.astype(np.uint8)
-        except Exception as e:
-            print(f"[Adjustments Error] Temp/Tint failed ({'GPU' if GPU_ENABLED else 'CPU'}): {e}. Falling back.")
-            if GPU_ENABLED: xp = np; img_arr = image.astype(xp.float32); result_arr = img_arr.copy(); result_arr[..., 0] += temp_factor; result_arr[..., 2] -= temp_factor; result_arr[..., 1] -= tint_factor; return xp.clip(result_arr, 0, 255).astype(np.uint8)
-            else: return image.copy()
+        except Exception:
+            logger.exception(
+                "Temp/Tint failed (%s). Falling back to CPU.",
+                "GPU" if GPU_ENABLED else "CPU",
+            )
+            if GPU_ENABLED:
+                img_arr_cpu = image.astype(np.float32)
+                result_arr_cpu = img_arr_cpu.copy()
+                result_arr_cpu[..., 0] += temp_factor
+                result_arr_cpu[..., 2] -= temp_factor
+                result_arr_cpu[..., 1] -= tint_factor
+                return np.clip(result_arr_cpu, 0, 255).astype(np.uint8)
+            return image.copy()
 
     @staticmethod
     def adjust_levels(image, in_black, in_white, gamma, out_black, out_white):
@@ -181,17 +179,15 @@ class AdvancedAdjustments:
         result = image.copy()
         # Ensure input is uint8 NumPy for the helper _apply_tone_curve_channel
         if result.dtype != np.uint8:
-            print("[Adjustments Warning] apply_curves expects uint8 input. Converting.")
+            logger.warning("apply_curves expects uint8 input. Converting.")
             result = np.clip(result, 0, 255).astype(np.uint8)
         # Check for CuPy *after* ensuring uint8
-        if 'cupy' in str(type(result)):
-             print("[Adjustments Warning] apply_curves expects NumPy input. Converting.")
-             # Need cp defined if GPU_ENABLED is true, rely on global scope
-             if GPU_ENABLED and 'cp' in globals() and cp: # Check cp exists
-                 result = cp.asnumpy(result)
-             else:
-                 # Should not happen if dtype is uint8, but handle defensively
-                 raise TypeError("Cannot convert non-GPU array using cp.asnumpy")
+        if "cupy" in str(type(result)):
+            logger.warning("apply_curves expects NumPy input. Converting.")
+            if GPU_ENABLED and cp is not None:
+                result = cp.asnumpy(result)
+            else:
+                raise TypeError("Cannot convert non-GPU array using cp.asnumpy")
 
 
         # Define the default identity curve for comparison
@@ -234,29 +230,20 @@ class AdvancedAdjustments:
         try:
             if r_curve_to_apply:
                 result[..., 0] = _apply_tone_curve_channel(result[..., 0], r_curve_to_apply)
-        except Exception as e:
-            import traceback
-            print(f"[Adjustments Error] Failed applying RED curve: {e}")
-            traceback.print_exc()
-            # Continue processing other channels
+        except Exception:
+            logger.exception("Failed applying RED curve. Continuing.")
 
         try:
             if g_curve_to_apply:
                 result[..., 1] = _apply_tone_curve_channel(result[..., 1], g_curve_to_apply)
-        except Exception as e:
-            import traceback
-            print(f"[Adjustments Error] Failed applying GREEN curve: {e}")
-            traceback.print_exc()
-            # Continue processing other channels
+        except Exception:
+            logger.exception("Failed applying GREEN curve. Continuing.")
 
         try:
             if b_curve_to_apply:
                 result[..., 2] = _apply_tone_curve_channel(result[..., 2], b_curve_to_apply)
-        except Exception as e:
-            import traceback
-            print(f"[Adjustments Error] Failed applying BLUE curve: {e}")
-            traceback.print_exc()
-            # Continue processing other channels
+        except Exception:
+            logger.exception("Failed applying BLUE curve. Continuing.")
 
         return result
 
@@ -285,10 +272,20 @@ class AdvancedAdjustments:
             result_arr[..., 0] += red_adj; result_arr[..., 1] -= green_adj; result_arr[..., 2] -= blue_adj
             result_arr = xp.clip(result_arr, 0, 255)
             return xp.asnumpy(result_arr).astype(np.uint8) if GPU_ENABLED else result_arr.astype(np.uint8)
-        except Exception as e:
-            print(f"[Adjustments Error] Additive Color Balance failed ({'GPU' if GPU_ENABLED else 'CPU'}): {e}. Falling back.")
-            if GPU_ENABLED: xp = np; img_arr = image.astype(xp.float32); result_arr = img_arr.copy(); result_arr[..., 0] += red_adj; result_arr[..., 1] -= green_adj; result_arr[..., 2] -= blue_adj; return xp.clip(result_arr, 0, 255).astype(np.uint8)
-            else: return image.copy()
+        except Exception:
+            logger.exception(
+                "Additive Color Balance failed (%s). Falling back.",
+                "GPU" if GPU_ENABLED else "CPU",
+            )
+            if GPU_ENABLED:
+                xp = np
+                img_arr = image.astype(xp.float32)
+                result_arr = img_arr.copy()
+                result_arr[..., 0] += red_adj
+                result_arr[..., 1] -= green_adj
+                result_arr[..., 2] -= blue_adj
+                return xp.clip(result_arr, 0, 255).astype(np.uint8)
+            return image.copy()
 
     @staticmethod
     def apply_color_balance(image, red_shift, green_shift, blue_shift, red_balance, green_balance, blue_balance):
@@ -304,10 +301,19 @@ class AdvancedAdjustments:
             if red_balance!=1.0 or green_balance!=1.0 or blue_balance!=1.0: result_arr *= xp.array([red_balance, green_balance, blue_balance], dtype=xp.float32)
             result_arr = xp.clip(result_arr, 0, 255)
             return xp.asnumpy(result_arr).astype(np.uint8) if GPU_ENABLED else result_arr.astype(np.uint8)
-        except Exception as e:
-            print(f"[Adjustments Error] Color Balance failed ({'GPU' if GPU_ENABLED else 'CPU'}): {e}. Falling back.")
-            if GPU_ENABLED: xp = np; img_arr = image.astype(xp.float32); result_arr = img_arr.copy(); result_arr += xp.array([red_shift, green_shift, blue_shift]); result_arr *= xp.array([red_balance, green_balance, blue_balance]); return xp.clip(result_arr, 0, 255).astype(np.uint8)
-            else: return image.copy()
+        except Exception:
+            logger.exception(
+                "Color Balance failed (%s). Falling back.",
+                "GPU" if GPU_ENABLED else "CPU",
+            )
+            if GPU_ENABLED:
+                xp = np
+                img_arr = image.astype(xp.float32)
+                result_arr = img_arr.copy()
+                result_arr += xp.array([red_shift, green_shift, blue_shift])
+                result_arr *= xp.array([red_balance, green_balance, blue_balance])
+                return xp.clip(result_arr, 0, 255).astype(np.uint8)
+            return image.copy()
 
     @staticmethod
     def adjust_channel_mixer(image, output_channel, r_mix, g_mix, b_mix, constant=0):
@@ -328,10 +334,20 @@ class AdvancedAdjustments:
             result_arr=img_arr.copy(); result_arr[...,out_idx]=new_ch
             result_arr=xp.clip(result_arr,0,255)
             return xp.asnumpy(result_arr).astype(np.uint8) if GPU_ENABLED else result_arr.astype(np.uint8)
-        except Exception as e:
-            print(f"[Adjustments Error] Channel Mixer failed ({'GPU' if GPU_ENABLED else 'CPU'}): {e}. Falling back.")
-            if GPU_ENABLED: xp = np; img_arr = image.astype(xp.float32); r_in,g_in,b_in=img_arr[...,0],img_arr[...,1],img_arr[...,2]; new_ch=(r_in*r_f+g_in*g_f+b_in*b_f+const_v); result_arr=img_arr.copy(); result_arr[...,out_idx]=new_ch; return xp.clip(result_arr,0,255).astype(np.uint8)
-            else: return image.copy()
+        except Exception:
+            logger.exception(
+                "Channel Mixer failed (%s). Falling back.",
+                "GPU" if GPU_ENABLED else "CPU",
+            )
+            if GPU_ENABLED:
+                xp = np
+                img_arr = image.astype(xp.float32)
+                r_in, g_in, b_in = img_arr[..., 0], img_arr[..., 1], img_arr[..., 2]
+                new_ch = (r_in * r_f + g_in * g_f + b_in * b_f + const_v)
+                result_arr = img_arr.copy()
+                result_arr[..., out_idx] = new_ch
+                return xp.clip(result_arr, 0, 255).astype(np.uint8)
+            return image.copy()
 
     @staticmethod
     def apply_noise_reduction(image, strength=10, template_window=7, search_window=21):
@@ -339,8 +355,10 @@ class AdvancedAdjustments:
         if image is None or image.size == 0 or strength <= 0: return image.copy()
 
         # Check if xphoto module is available
-        if not hasattr(cv2, 'xphoto') or not hasattr(cv2.xphoto, 'createSimpleWB'): # Check for a known function
-            print("[Adjustments Error] Noise Reduction requires the 'opencv-contrib-python' package. Please install it (`pip install opencv-contrib-python`). Skipping.")
+        if not hasattr(cv2, "xphoto") or not hasattr(cv2.xphoto, "createSimpleWB"):
+            logger.warning(
+                "Noise Reduction requires 'opencv-contrib-python'. Skipping noise reduction."
+            )
             return image.copy()
 
         # Ensure window sizes are odd and valid
@@ -356,11 +374,13 @@ class AdvancedAdjustments:
             denoised_bgr = cv2.fastNlMeansDenoisingColored(img_bgr, None, h=float(strength), hColor=float(strength), templateWindowSize=template_window, searchWindowSize=search_window)
             # Convert back to RGB
             return cv2.cvtColor(denoised_bgr, cv2.COLOR_BGR2RGB)
-        except cv2.error as e:
-            print(f"[Adjustments Error] Noise Reduction (fastNlMeansDenoisingColored) failed: {e}. Is 'opencv-contrib-python' installed correctly?")
+        except cv2.error:
+            logger.exception(
+                "Noise Reduction (fastNlMeansDenoisingColored) failed. Is 'opencv-contrib-python' installed correctly?"
+            )
             return image.copy()
-        except Exception as e:
-            print(f"[Adjustments Error] Noise Reduction unexpected error: {e}")
+        except Exception:
+            logger.exception("Noise Reduction unexpected error.")
             return image.copy()
 
     @staticmethod
@@ -422,11 +442,11 @@ class AdvancedAdjustments:
 
             return inpainted_image
 
-        except cv2.error as e:
-            print(f"[Adjustments Error] Dust Removal (cv2) failed: {e}")
+        except cv2.error:
+            logger.exception("Dust Removal (cv2) failed.")
             return image.copy()
-        except Exception as e:
-            print(f"[Adjustments Error] Dust Removal unexpected error: {e}")
+        except Exception:
+            logger.exception("Dust Removal unexpected error.")
             return image.copy()
 
     @staticmethod
@@ -470,7 +490,10 @@ class AdvancedAdjustments:
         }
 
         if color_range not in hue_ranges:
-            print(f"[Adjustments Warning] Selective Color for '{color_range}' not implemented or invalid range.")
+            logger.warning(
+                "Selective Color for '%s' not implemented or invalid range.",
+                color_range,
+            )
             return image.copy()
 
         img_float = image.astype(np.float32) / 255.0 # Work with 0.0-1.0 range
@@ -637,11 +660,54 @@ class AdvancedAdjustments:
 
     @staticmethod
     def apply_color_grading(image, shadows_rgb, midtones_rgb, highlights_rgb):
-        """Applies color grading to shadows, midtones, and highlights."""
-        # This is a placeholder for a more complex color grading implementation
-        # A simple approach might involve masks based on luminosity and applying color shifts
-        print("[Adjustments Warning] Color Grading not fully implemented.")
-        return image.copy()
+        """
+        Applies simple color grading to shadows, midtones, and highlights.
+
+        Expects:
+          - image: uint8 RGB
+          - shadows_rgb / midtones_rgb / highlights_rgb: list/tuple of 3 floats
+            representing additive RGB offsets in 0..1 space (e.g., 0.05 == +5%).
+        """
+        if image is None or image.size == 0:
+            return image.copy() if image is not None else None
+
+        # Normalize and validate inputs
+        def _vec3(v):
+            if v is None:
+                return np.array([0.0, 0.0, 0.0], dtype=np.float32)
+            if isinstance(v, (list, tuple, np.ndarray)) and len(v) == 3:
+                return np.array([float(v[0]), float(v[1]), float(v[2])], dtype=np.float32)
+            logger.warning("apply_color_grading: invalid vector %r; using zeros", v)
+            return np.array([0.0, 0.0, 0.0], dtype=np.float32)
+
+        sh = _vec3(shadows_rgb)
+        mid = _vec3(midtones_rgb)
+        hi = _vec3(highlights_rgb)
+
+        if np.allclose(sh, 0) and np.allclose(mid, 0) and np.allclose(hi, 0):
+            return image.copy()
+
+        # Work in float 0..1
+        img = image.astype(np.float32) / 255.0
+
+        # Simple luminance proxy (Rec.709)
+        lum = (0.2126 * img[..., 0] + 0.7152 * img[..., 1] + 0.0722 * img[..., 2]).astype(np.float32)
+
+        # Build smooth masks for tonal ranges.
+        # shadows: 1 at 0.0 -> 0 at ~0.5
+        # highlights: 0 at ~0.5 -> 1 at 1.0
+        # midtones: what's left (clipped)
+        shadows_w = np.clip((0.5 - lum) / 0.5, 0.0, 1.0)
+        highlights_w = np.clip((lum - 0.5) / 0.5, 0.0, 1.0)
+        midtones_w = np.clip(1.0 - shadows_w - highlights_w, 0.0, 1.0)
+
+        # Apply additive grading per range
+        graded = img.copy()
+        graded += shadows_w[..., None] * sh[None, None, :]
+        graded += midtones_w[..., None] * mid[None, None, :]
+        graded += highlights_w[..., None] * hi[None, None, :]
+
+        return (np.clip(graded, 0.0, 1.0) * 255.0).astype(np.uint8)
 
     @staticmethod
     def apply_film_grain(image_float, intensity, size, roughness):
@@ -687,7 +753,11 @@ class AdvancedAdjustments:
 
              # Final check, if still mismatch, log error and return original
              if grain.shape != image_float.shape:
-                  print(f"[Adjustments Error] Grain shape mismatch after resize/conversion: Img={image_float.shape}, Grain={grain.shape}")
+                  logger.error(
+                      "Grain shape mismatch after resize/conversion: Img=%s Grain=%s",
+                      image_float.shape,
+                      grain.shape,
+                  )
                   return image_float
 
 
@@ -759,8 +829,8 @@ class AdvancedAdjustments:
             wb = cv2.xphoto.createSimpleWB()
             # SimpleWB might work better on linear data, but try on sRGB first
             return wb.balanceWhite(image)
-        except cv2.error as e:
-            print(f"[Adjustments Error] SimpleWB failed: {e}")
+        except cv2.error:
+            logger.exception("SimpleWB failed.")
             return None
 
     @staticmethod
@@ -772,8 +842,8 @@ class AdvancedAdjustments:
             # May need a path to a model file if not using default
             # wb.loadModel("path/to/model")
             return wb.balanceWhite(image)
-        except cv2.error as e:
-            print(f"[Adjustments Error] LearningBasedWB failed: {e}")
+        except cv2.error:
+            logger.exception("LearningBasedWB failed.")
             return None
 
     # --- Combined Auto White Balance ---
@@ -793,11 +863,11 @@ class AdvancedAdjustments:
         elif method == 'learning_wb':
             return AdvancedAdjustments._apply_learning_based_wb(image) or original_image # Return original on failure
         else:
-            print(f"[Adjustments Warning] Unknown AWB method: {method}")
+            logger.warning("Unknown AWB method: %s", method)
             return original_image
 
         if scales is None:
-            print(f"[Adjustments Warning] AWB method '{method}' failed to calculate scales.")
+            logger.warning("AWB method '%s' failed to calculate scales.", method)
             return original_image
 
         scale_r, scale_g, scale_b = scales
@@ -831,7 +901,7 @@ class AdvancedAdjustments:
                 # Calculate Rec709Luma: 0.2126*R + 0.7152*G + 0.0722*B
                 # Note: 'magnitude' and 'rgb' modes are proxied using Luminance for single-channel analysis
                 if colorspace_mode != 'luminance':
-                     print(f"[Adjustments Info] Auto Levels mode '{colorspace_mode}' proxied using Rec709Luma.")
+                     logger.info("Auto Levels mode '%s' proxied using Rec709Luma.", colorspace_mode)
                 channel = (0.2126 * img_float[:,:,0] + 0.7152 * img_float[:,:,1] + 0.0722 * img_float[:,:,2]).astype(np.uint8)
             elif colorspace_mode == 'lightness':
                 # Convert to HLS and use the L channel (index 1)
@@ -848,7 +918,7 @@ class AdvancedAdjustments:
                 # Calculate the average of R, G, B channels (proxy for OHTA)
                 channel = np.mean(img_float, axis=2).astype(np.uint8)
             else:
-                print(f"[Adjustments Warning] Unknown colorspace_mode '{colorspace_mode}'. Defaulting to Rec709Luma.")
+                logger.warning("Unknown colorspace_mode '%s'. Defaulting to Rec709Luma.", colorspace_mode)
                 channel = (0.2126 * img_float[:,:,0] + 0.7152 * img_float[:,:,1] + 0.0722 * img_float[:,:,2]).astype(np.uint8)
             # --- End Channel Determination ---
 
@@ -899,11 +969,11 @@ class AdvancedAdjustments:
                     'levels_in_white': int(round(in_white)),
                     'levels_gamma': round(gamma, 2)} # Round gamma for UI
 
-        except cv2.error as e:
-            print(f"[Adjustments Error] OpenCV error during Auto Levels calculation: {e}")
+        except cv2.error:
+            logger.exception("OpenCV error during Auto Levels calculation.")
             return {'levels_in_black': 0, 'levels_in_white': 255, 'levels_gamma': 1.0}
-        except Exception as e:
-            print(f"[Adjustments Error] Unexpected error during Auto Levels calculation: {e}")
+        except Exception:
+            logger.exception("Unexpected error during Auto Levels calculation.")
             return {'levels_in_black': 0, 'levels_in_white': 255, 'levels_gamma': 1.0}
 
     # --- Auto Color ---
@@ -965,7 +1035,14 @@ class AdvancedAdjustments:
                     mid_val = np.clip(mid_val, 0, 255) # Ensure valid range
 
                     params[curve_key] = [[0, 0], [128, int(mid_val)], [255, 255]]
-                    print(f"  Auto Color (Gamma): Channel={channel_name}, Mean={mean_val:.1f}, TargetGray={neutral_gray:.1f}, Gamma={gamma:.2f}, CurveMid={mid_val}")
+                    logger.debug(
+                        "Auto Color (Gamma): Channel=%s Mean=%.1f TargetGray=%.1f Gamma=%.2f CurveMid=%s",
+                        channel_name,
+                        mean_val,
+                        neutral_gray,
+                        gamma,
+                        mid_val,
+                    )
 
                 # Ensure temp/tint are reset when applying curves
                 params['temp'] = 0
@@ -989,7 +1066,14 @@ class AdvancedAdjustments:
                 # Estimate slider values (inverse relationship, scaled differently)
                 temp_adj = int(round(np.clip(-temp_diff_effect / 0.6, -100, 100))) # Heuristic scaling
                 tint_adj = int(round(np.clip(-tint_diff_effect / 0.3, -100, 100))) # Heuristic scaling
-                print(f"  Auto Color (Recolor): Scales=({scale_r:.2f},{scale_g:.2f},{scale_b:.2f}), Est. Temp={temp_adj}, Est. Tint={tint_adj}")
+                logger.debug(
+                    "Auto Color (Recolor): Scales=(%.2f,%.2f,%.2f) Est. Temp=%s Est. Tint=%s",
+                    scale_r,
+                    scale_g,
+                    scale_b,
+                    temp_adj,
+                    tint_adj,
+                )
 
                 # Return temp/tint and reset curves
                 return {
@@ -1000,13 +1084,11 @@ class AdvancedAdjustments:
             elif method == 'none':
                  return default_params # Return defaults to reset everything
             else:
-                 print(f"[Adjustments Warning] Unknown Auto Color method: {method}. Returning defaults.")
+                 logger.warning("Unknown Auto Color method: %s. Returning defaults.", method)
                  return default_params
 
-        except Exception as e:
-            import traceback
-            print(f"[Adjustments Error] Auto Color calculation unexpected error: {e}")
-            traceback.print_exc()
+        except Exception:
+            logger.exception("Auto Color calculation unexpected error.")
             return default_params
 
     @staticmethod
@@ -1039,13 +1121,19 @@ class AdvancedAdjustments:
             temp_adj = int(round(np.clip(-temp_diff_effect / 0.6, -100, 100)))
             tint_adj = int(round(np.clip(-tint_diff_effect / 0.3, -100, 100)))
 
-            print(f"  Gray World AWB: TargetGray={neutral_gray:.1f}, Scales=({scale_r:.2f},{scale_g:.2f},{scale_b:.2f}), Est. Temp={temp_adj}, Est. Tint={tint_adj}")
+            logger.debug(
+                "Gray World AWB: TargetGray=%.1f Scales=(%.2f,%.2f,%.2f) Est. Temp=%s Est. Tint=%s",
+                neutral_gray,
+                scale_r,
+                scale_g,
+                scale_b,
+                temp_adj,
+                tint_adj,
+            )
             return {'temp': temp_adj, 'tint': tint_adj}
 
-        except Exception as e:
-            import traceback
-            print(f"[Adjustments Error] Gray World AWB calculation unexpected error: {e}")
-            traceback.print_exc()
+        except Exception:
+            logger.exception("Gray World AWB calculation unexpected error.")
             return {'temp': 0, 'tint': 0}
 
     @staticmethod
@@ -1099,13 +1187,19 @@ class AdvancedAdjustments:
             temp_adj = int(round(np.clip(-temp_diff_effect / 0.6, -100, 100)))
             tint_adj = int(round(np.clip(-tint_diff_effect / 0.3, -100, 100)))
 
-            print(f"  White Patch AWB ({percentile}% excluded): Target=255, Scales=({scale_r:.2f},{scale_g:.2f},{scale_b:.2f}), Est. Temp={temp_adj}, Est. Tint={tint_adj}")
+            logger.debug(
+                "White Patch AWB (%s%% excluded): Target=255 Scales=(%.2f,%.2f,%.2f) Est. Temp=%s Est. Tint=%s",
+                percentile,
+                scale_r,
+                scale_g,
+                scale_b,
+                temp_adj,
+                tint_adj,
+            )
             return {'temp': temp_adj, 'tint': tint_adj}
 
-        except Exception as e:
-            import traceback
-            print(f"[Adjustments Error] White Patch AWB calculation unexpected error: {e}")
-            traceback.print_exc()
+        except Exception:
+            logger.exception("White Patch AWB calculation unexpected error.")
             return {'temp': 0, 'tint': 0}
 
     @staticmethod
@@ -1116,7 +1210,7 @@ class AdvancedAdjustments:
         """
         if image is None or image.size == 0: return {'temp': 0, 'tint': 0}
         if not hasattr(cv2, 'xphoto') or not hasattr(cv2.xphoto, 'createSimpleWB'):
-            print("[Adjustments Error] SimpleWB requires 'opencv-contrib-python'.")
+            logger.error("SimpleWB requires 'opencv-contrib-python'.")
             return {'temp': 0, 'tint': 0}
 
         try:
@@ -1140,16 +1234,14 @@ class AdvancedAdjustments:
             temp_adj = int(round(np.clip(-temp_diff / 0.6, -100, 100)))
             tint_adj = int(round(np.clip(-tint_diff / 0.3, -100, 100)))
 
-            print(f"  SimpleWB AWB: Est. Temp={temp_adj}, Est. Tint={tint_adj}")
+            logger.debug("SimpleWB AWB: Est. Temp=%s Est. Tint=%s", temp_adj, tint_adj)
             return {'temp': temp_adj, 'tint': tint_adj}
 
-        except cv2.error as e:
-            print(f"[Adjustments Error] SimpleWB calculation (cv2) failed: {e}.")
+        except cv2.error:
+            logger.exception("SimpleWB calculation (cv2) failed.")
             return {'temp': 0, 'tint': 0}
-        except Exception as e:
-            import traceback
-            print(f"[Adjustments Error] SimpleWB calculation unexpected error: {e}")
-            traceback.print_exc()
+        except Exception:
+            logger.exception("SimpleWB calculation unexpected error.")
             return {'temp': 0, 'tint': 0}
 
     @staticmethod
@@ -1161,7 +1253,7 @@ class AdvancedAdjustments:
         """
         if image is None or image.size == 0: return {'temp': 0, 'tint': 0}
         if not hasattr(cv2, 'xphoto') or not hasattr(cv2.xphoto, 'createLearningBasedWB'):
-            print("[Adjustments Error] LearningBasedWB requires 'opencv-contrib-python'.")
+            logger.error("LearningBasedWB requires 'opencv-contrib-python'.")
             return {'temp': 0, 'tint': 0}
 
         try:
@@ -1186,66 +1278,16 @@ class AdvancedAdjustments:
             temp_adj = int(round(np.clip(-temp_diff / 0.6, -100, 100)))
             tint_adj = int(round(np.clip(-tint_diff / 0.3, -100, 100)))
 
-            print(f"  LearningBasedWB AWB: Est. Temp={temp_adj}, Est. Tint={tint_adj}")
+            logger.debug("LearningBasedWB AWB: Est. Temp=%s Est. Tint=%s", temp_adj, tint_adj)
             return {'temp': temp_adj, 'tint': tint_adj}
 
-        except cv2.error as e:
-            print(f"[Adjustments Error] LearningBasedWB calculation (cv2) failed: {e}. Might need model file?")
+        except cv2.error:
+            logger.exception("LearningBasedWB calculation (cv2) failed. Might need model file?")
             return {'temp': 0, 'tint': 0}
-        except Exception as e:
-            import traceback
-            print(f"[Adjustments Error] LearningBasedWB calculation unexpected error: {e}")
-            traceback.print_exc()
+        except Exception:
+            logger.exception("LearningBasedWB calculation unexpected error.")
             return {'temp': 0, 'tint': 0}
 
-        percentile = np.clip(percentile, 0.0, 10.0) # Percentile to exclude
-
-        try:
-            img_float = image.astype(np.float32)
-            # Exclude top percentile brightest pixels if needed
-            if percentile > 0:
-                # Calculate overall brightness (e.g., max channel value per pixel)
-                brightness = np.max(img_float, axis=2)
-                num_pixels = image.shape[0] * image.shape[1]
-                k = int(num_pixels * (percentile / 100.0))
-                k = max(1, min(k, num_pixels -1)) # Ensure k is valid and leaves at least one pixel
-                # Find brightness threshold to exclude top k pixels
-                brightness_threshold = np.partition(brightness.flatten(), -k)[-k]
-                # Create mask for pixels *below* the threshold
-                mask = brightness < brightness_threshold
-                if not np.any(mask): # If all pixels are above threshold, use all pixels
-                     mask = np.ones(brightness.shape, dtype=bool)
-            else:
-                mask = np.ones((image.shape[0], image.shape[1]), dtype=bool) # Use all pixels
-
-            # Find max R, G, B within the masked area
-            max_r = np.max(img_float[:,:,0][mask])
-            max_g = np.max(img_float[:,:,1][mask])
-            max_b = np.max(img_float[:,:,2][mask])
-
-            # Target is 255 (or max possible value)
-            target_white = 255.0
-
-            # Calculate scaling factors
-            scale_r = target_white / max_r if max_r > 1e-5 else 1.0
-            scale_g = target_white / max_g if max_g > 1e-5 else 1.0
-            scale_b = target_white / max_b if max_b > 1e-5 else 1.0
-
-            # Estimate Temp/Tint adjustments
-            # Use the *target* white as the reference for calculating effect difference
-            temp_diff_effect = (scale_b - scale_r) * target_white
-            tint_diff_effect = (scale_g - (scale_r + scale_b)/2.0) * target_white
-            temp_adj = int(round(np.clip(-temp_diff_effect / 0.6, -100, 100)))
-            tint_adj = int(round(np.clip(-tint_diff_effect / 0.3, -100, 100)))
-
-            print(f"  White Patch AWB ({percentile}% excluded): Target=255, Scales=({scale_r:.2f},{scale_g:.2f},{scale_b:.2f}), Est. Temp={temp_adj}, Est. Tint={tint_adj}")
-            return {'temp': temp_adj, 'tint': tint_adj}
-
-        except Exception as e:
-            import traceback
-            print(f"[Adjustments Error] White Patch AWB calculation unexpected error: {e}")
-            traceback.print_exc()
-            return {'temp': 0, 'tint': 0}
 
     @staticmethod
     def calculate_near_white_awb_params(image, percentile=1.0):
@@ -1286,7 +1328,9 @@ class AdvancedAdjustments:
             mask = weight_map >= threshold
 
             if not np.any(mask):
-                print("[Adjustments Warning] Near-White AWB: No pixels found in the top percentile. Using Grayworld fallback.")
+                logger.warning(
+                    "Near-White AWB: no pixels found in the top percentile. Using Grayworld fallback."
+                )
                 # Fallback to Grayworld-like calculation if mask is empty
                 means = np.mean(img_float, axis=(0, 1))
                 mean_r, mean_g, mean_b = means[0], means[1], means[2]
@@ -1318,16 +1362,23 @@ class AdvancedAdjustments:
             temp_adj = int(round(np.clip(-temp_diff_effect / 0.6, -100, 100)))
             tint_adj = int(round(np.clip(-tint_diff_effect / 0.3, -100, 100)))
 
-            print(f"  Near-White AWB ({percentile}%): TargetGray={neutral_gray:.1f}, Scales=({scale_r:.2f},{scale_g:.2f},{scale_b:.2f}), Est. Temp={temp_adj}, Est. Tint={tint_adj}")
+            logger.debug(
+                "Near-White AWB (%s%%): TargetGray=%.1f Scales=(%.2f,%.2f,%.2f) Est. Temp=%s Est. Tint=%s",
+                percentile,
+                neutral_gray,
+                scale_r,
+                scale_g,
+                scale_b,
+                temp_adj,
+                tint_adj,
+            )
             return {'temp': temp_adj, 'tint': tint_adj}
 
-        except cv2.error as e:
-            print(f"[Adjustments Error] Near-White AWB calculation (cv2) failed: {e}.")
+        except cv2.error:
+            logger.exception("Near-White AWB calculation (cv2) failed.")
             return {'temp': 0, 'tint': 0}
-        except Exception as e:
-            import traceback
-            print(f"[Adjustments Error] Near-White AWB calculation unexpected error: {e}")
-            traceback.print_exc()
+        except Exception:
+            logger.exception("Near-White AWB calculation unexpected error.")
             return {'temp': 0, 'tint': 0}
 
 
@@ -1345,15 +1396,15 @@ class AdvancedAdjustments:
                 'levels_in_black': 0, 'levels_in_white': 255, 'levels_gamma': 1.0
             }
 
-        print("--- Calculating Auto Tone Parameters ---")
+        logger.debug("--- Calculating Auto Tone Parameters ---")
         params = {}
 
         # 1. Noise Reduction Strength (Fixed value from defaults)
         params['noise_reduction_strength'] = nr_strength
-        print(f"  Auto Tone Param: Noise Reduction Strength = {nr_strength}")
+        logger.debug("Auto Tone Param: Noise Reduction Strength=%s", nr_strength)
 
         # 2. Auto White Balance (Calculate Temp/Tint)
-        print(f"  Auto Tone Param: Calculating AWB (Method: {awb_method})")
+        logger.debug("Auto Tone Param: Calculating AWB (Method=%s)", awb_method)
         # Use the existing calculate_auto_white_balance_params (or similar logic)
         # Assuming calculate_auto_white_balance_params exists and returns {'temp': val, 'tint': val}
         # If not, we need to implement it based on apply_auto_white_balance logic
@@ -1367,25 +1418,25 @@ class AdvancedAdjustments:
                 tint_diff = (new_means[1] - (new_means[0] + new_means[2])/2.0) - (orig_means[1] - (orig_means[0] + orig_means[2])/2.0)
                 params['temp'] = int(round(np.clip(-temp_diff / 0.6, -100, 100)))
                 params['tint'] = int(round(np.clip(-tint_diff / 0.3, -100, 100)))
-                print(f"  Auto Tone Param: Calculated Temp={params['temp']}, Tint={params['tint']}")
+                logger.debug("Auto Tone Param: Calculated Temp=%s Tint=%s", params['temp'], params['tint'])
             else:
-                print("  Auto Tone Param: AWB calculation failed, using defaults.")
+                logger.debug("Auto Tone Param: AWB calculation failed, using defaults.")
                 params['temp'] = 0
                 params['tint'] = 0
-        except Exception as e:
-            print(f"  Auto Tone Param: Error calculating AWB params: {e}")
+        except Exception:
+            logger.exception("Auto Tone Param: error calculating AWB params.")
             params['temp'] = 0
             params['tint'] = 0
 
 
         # 3. Auto Levels (Calculate Levels Params)
-        print(f"  Auto Tone Param: Calculating Auto Levels (Mode: {al_mode}, Midrange: {al_midrange})")
+        logger.debug("Auto Tone Param: Calculating Auto Levels (Mode=%s Midrange=%s)", al_mode, al_midrange)
         try:
             level_params = AdvancedAdjustments.calculate_auto_levels_params(image, colorspace_mode=al_mode, midrange=al_midrange)
             params.update(level_params)
-            print(f"  Auto Tone Param: Calculated Levels={level_params}")
-        except Exception as e:
-            print(f"  Auto Tone Param: Error calculating Auto Levels params: {e}")
+            logger.debug("Auto Tone Param: Calculated Levels=%s", level_params)
+        except Exception:
+            logger.exception("Auto Tone Param: error calculating Auto Levels params.")
             params['levels_in_black'] = 0
             params['levels_in_white'] = 255
             params['levels_gamma'] = 1.0
@@ -1393,20 +1444,34 @@ class AdvancedAdjustments:
         # 4. Clarity (Not directly calculated for sliders)
         # The clarity adjustment will be applied based on its own slider value during the main processing.
         # We don't set a specific clarity value here.
-        print(f"  Auto Tone Param: Clarity Strength ({clarity_strength}) will be applied by main pipeline if slider > 0.")
+        logger.debug(
+            "Auto Tone Param: Clarity Strength (%s) will be applied by main pipeline if slider > 0.",
+            clarity_strength,
+        )
 
-
-        print("--- Auto Tone Parameter Calculation Finished ---")
+        logger.debug("--- Auto Tone Parameter Calculation Finished ---")
         return params
 
 
 # --- Main Adjustment Application Function ---
 
-# Instantiate managers globally within this module if needed, or pass them in.
-# Passing them might be cleaner, but requires changing the call signature.
-# Global instantiation is simpler for now if PRESET_MANAGERS_AVAILABLE.
+# Preset managers used for preview inside apply_all_adjustments().
+# Default behavior keeps a module-level instance, but the UI/service can inject the
+# live manager(s) so newly saved presets are immediately available.
 _film_preset_manager = FilmPresetManager() if PRESET_MANAGERS_AVAILABLE else None
 _photo_preset_manager = PhotoPresetManager() if PRESET_MANAGERS_AVAILABLE else None
+
+
+def set_film_preset_manager(manager):
+    """Inject the film preset manager used for preview in apply_all_adjustments()."""
+    global _film_preset_manager
+    _film_preset_manager = manager
+
+
+def set_photo_preset_manager(manager):
+    """Inject the photo preset manager used for preview in apply_all_adjustments()."""
+    global _photo_preset_manager
+    _photo_preset_manager = manager
 
 
 def apply_all_adjustments(image, adjustments_dict):
@@ -1417,14 +1482,13 @@ def apply_all_adjustments(image, adjustments_dict):
     Expects image as uint8 NumPy array (RGB). Returns uint8 NumPy array (RGB).
     """
     if image is None:
-        print("[Adjustments Error] apply_all_adjustments received None image.")
+        logger.error("apply_all_adjustments received None image.")
         return None
     if not adjustments_dict:
-        print("[Adjustments Warning] apply_all_adjustments received empty adjustments dict.")
-        return image.copy() # Return copy if no adjustments
+        logger.warning("apply_all_adjustments received empty adjustments dict.")
+        return image.copy()  # Return copy if no adjustments
 
-    # --- Log received dictionary for debugging ---
-    print(f"\n--- Starting Adjustment Pipeline --- Received adjustments_dict: {adjustments_dict}")
+    logger.debug("Starting adjustment pipeline. adjustments_dict=%s", adjustments_dict)
 
     current_image = image.copy() # Work on a copy
 
@@ -1435,15 +1499,14 @@ def apply_all_adjustments(image, adjustments_dict):
     # --- Debug: Check image state ---
     def check_img(step_name):
         if current_image is None:
-            print(f"[Adjustments Error] Image became None after step: {step_name}")
+            logger.error("Image became None after step: %s", step_name)
             return False
-        # print(f"  After {step_name}: shape={current_image.shape}, dtype={current_image.dtype}, min={np.min(current_image)}, max={np.max(current_image)}")
         return True
 
     # --- Apply Adjustments in Order ---
 
     # 1. Basic Adjustments (Brightness, Contrast, Saturation, Hue)
-    print("  Pipeline Step: Basic Adjustments...")
+    logger.debug("Pipeline Step: Basic Adjustments...")
     brightness = adjustments_dict.get('brightness', 0)
     contrast = adjustments_dict.get('contrast', 0)
     saturation = adjustments_dict.get('saturation', 0)
@@ -1453,19 +1516,22 @@ def apply_all_adjustments(image, adjustments_dict):
     current_image = basic_adjuster.adjust_saturation(current_image, saturation)
     current_image = basic_adjuster.adjust_hue(current_image, hue)
     if not check_img("Basic Adjustments"): return None
-    print("  Pipeline Step: Basic Adjustments Done.")
+    logger.debug("Pipeline Step: Basic Adjustments Done.")
 
     # 2. White Balance (Temp/Tint)
     temp = adjustments_dict.get('temp', 0)
     tint = adjustments_dict.get('tint', 0)
-    print("  Pipeline Step: White Balance (Temp/Tint)...")
+    logger.debug("Pipeline Step: White Balance (Temp/Tint)...")
     current_image = basic_adjuster.adjust_temp_tint(current_image, temp, tint)
     if not check_img("Temp/Tint"): return None
 
     # --- Apply Preset (if specified for preview) ---
     preset_info = adjustments_dict.get('preset_info')
-    # --- DEBUG PRINT ---
-    print(f"  DEBUG: Checking preset block. preset_info={preset_info}, PRESET_MANAGERS_AVAILABLE={PRESET_MANAGERS_AVAILABLE}")
+    logger.debug(
+        "Checking preset preview block. preset_info=%s PRESET_MANAGERS_AVAILABLE=%s",
+        preset_info,
+        PRESET_MANAGERS_AVAILABLE,
+    )
     if preset_info and PRESET_MANAGERS_AVAILABLE:
         preset_type = preset_info.get('type')
         preset_id = preset_info.get('id')
@@ -1473,7 +1539,12 @@ def apply_all_adjustments(image, adjustments_dict):
         grain_scale = preset_info.get('grain_scale') # Might be None
 
         if preset_type == 'film' and preset_id and _film_preset_manager:
-            print(f"[Adjustments] Applying film preset preview: {preset_id}, Intensity: {intensity}, Grain Scale: {grain_scale}")
+            logger.debug(
+                "Applying film preset preview: %s (intensity=%s grain_scale=%s)",
+                preset_id,
+                intensity,
+                grain_scale,
+            )
             try:
                 # We need the preset definition to apply grain correctly if needed
                 preset_data = _film_preset_manager.get_preset(preset_id)
@@ -1482,23 +1553,27 @@ def apply_all_adjustments(image, adjustments_dict):
                      current_image = _film_preset_manager.apply_preset(current_image, preset_data, intensity, grain_scale)
                      if not check_img(f"Film Preset: {preset_id}"): return None # Check result after applying
                 else:
-                     print(f"[Adjustments Warning] Film preset '{preset_id}' not found for preview.")
-            except Exception as e:
-                print(f"[Adjustments Error] Failed applying film preset preview '{preset_id}': {e}")
-                # Continue with other adjustments, but log the error
+                    logger.warning("Film preset '%s' not found for preview.", preset_id)
+            except Exception:
+                logger.exception("Failed applying film preset preview '%s'.", preset_id)
 
         elif preset_type == 'photo' and preset_id and _photo_preset_manager:
-            print(f"[Adjustments] Applying photo preset preview: {preset_id}, Intensity: {intensity}")
+            logger.debug(
+                "Applying photo preset preview: %s (intensity=%s)",
+                preset_id,
+                intensity,
+            )
             try:
-                 current_image = _photo_preset_manager.apply_photo_preset(current_image, preset_id, intensity)
-                 if not check_img(f"Photo Preset: {preset_id}"): return None # Check result after applying
-            except Exception as e:
-                print(f"[Adjustments Error] Failed applying photo preset preview '{preset_id}': {e}")
-                # Continue with other adjustments, but log the error
-    print("  Pipeline Step: White Balance Done.") # Moved this print after preset block
+                current_image = _photo_preset_manager.apply_photo_preset(current_image, preset_id, intensity)
+                if not check_img(f"Photo Preset: {preset_id}"):
+                    return None  # Check result after applying
+            except Exception:
+                logger.exception("Failed applying photo preset preview '%s'.", preset_id)
+
+    logger.debug("Pipeline Step: White Balance Done.")
 
     # 3. Levels
-    print("  Pipeline Step: Levels...")
+    logger.debug("Pipeline Step: Levels...")
     current_image = basic_adjuster.adjust_levels(
         current_image,
         adjustments_dict.get('levels_in_black', 0),
@@ -1508,10 +1583,10 @@ def apply_all_adjustments(image, adjustments_dict):
         adjustments_dict.get('levels_out_white', 255)
     )
     if not check_img("Levels"): return None
-    print("  Pipeline Step: Levels Done.")
+    logger.debug("Pipeline Step: Levels Done.")
 
     # 4. Curves
-    print("  Pipeline Step: Curves...")
+    logger.debug("Pipeline Step: Curves...")
     current_image = advanced_adjuster.apply_curves(
         current_image,
         adjustments_dict.get('curves_red'),
@@ -1520,21 +1595,21 @@ def apply_all_adjustments(image, adjustments_dict):
         adjustments_dict.get('curves_rgb')
     )
     if not check_img("Curves"): return None
-    print("  Pipeline Step: Curves Done.")
+    logger.debug("Pipeline Step: Curves Done.")
 
     # --- Dust Removal ---
     if adjustments_dict.get('dust_removal_enabled', False):
-        print("  Pipeline Step: Dust Removal...")
+        logger.debug("Pipeline Step: Dust Removal...")
         current_image = AdvancedAdjustments.apply_dust_removal(
             current_image,
             sensitivity=adjustments_dict.get('dust_removal_sensitivity', 50), # Default sensitivity
             radius=adjustments_dict.get('dust_removal_radius', 3) # Default radius
         )
         if not check_img("Dust Removal"): return None
-        print("  Pipeline Step: Dust Removal Done.")
+        logger.debug("Pipeline Step: Dust Removal Done.")
 
     # 5. Channel Mixer (Apply per output channel)
-    print("  Pipeline Step: Channel Mixer...")
+    logger.debug("Pipeline Step: Channel Mixer...")
     for out_ch_name in ['Red', 'Green', 'Blue']:
         r_mix = adjustments_dict.get(f'mixer_{out_ch_name.lower()}_r', 100 if out_ch_name == 'Red' else 0)
         g_mix = adjustments_dict.get(f'mixer_{out_ch_name.lower()}_g', 100 if out_ch_name == 'Green' else 0)
@@ -1547,10 +1622,10 @@ def apply_all_adjustments(image, adjustments_dict):
         if not is_id:
             current_image = advanced_adjuster.adjust_channel_mixer(current_image, out_ch_name, r_mix, g_mix, b_mix, const)
             if not check_img(f"Channel Mixer ({out_ch_name})"): return None
-    print("  Pipeline Step: Channel Mixer Done.")
+    logger.debug("Pipeline Step: Channel Mixer Done.")
 
     # 6. HSL Adjustments (Apply per color range)
-    print("  Pipeline Step: HSL...")
+    logger.debug("Pipeline Step: HSL...")
     for color_range in ['Reds', 'Yellows', 'Greens', 'Cyans', 'Blues', 'Magentas']:
         color_key = color_range.lower()
         h_shift = adjustments_dict.get(f'hsl_{color_key}_h', 0)
@@ -1559,10 +1634,10 @@ def apply_all_adjustments(image, adjustments_dict):
         if h_shift != 0 or s_shift != 0 or l_shift != 0:
             current_image = advanced_adjuster.adjust_hsl_by_range(current_image, color_range, h_shift, s_shift, l_shift)
             if not check_img(f"HSL ({color_range})"): return None
-    print("  Pipeline Step: HSL Done.")
+    logger.debug("Pipeline Step: HSL Done.")
 
     # 7. Selective Color (Apply per color range)
-    print("  Pipeline Step: Selective Color...")
+    logger.debug("Pipeline Step: Selective Color...")
     relative_mode = adjustments_dict.get('sel_relative', True)
     for color_range in ['Reds', 'Yellows', 'Greens', 'Cyans', 'Blues', 'Magentas', 'Whites', 'Neutrals', 'Blacks']:
          color_key = color_range.lower()
@@ -1573,20 +1648,20 @@ def apply_all_adjustments(image, adjustments_dict):
          if c_adj != 0 or m_adj != 0 or y_adj != 0 or k_adj != 0:
              current_image = advanced_adjuster.adjust_selective_color(current_image, color_range, c_adj, m_adj, y_adj, k_adj, relative_mode)
              if not check_img(f"Selective Color ({color_range})"): return None
-    print("  Pipeline Step: Selective Color Done.")
+    logger.debug("Pipeline Step: Selective Color Done.")
 
     # 8. Noise Reduction
     nr_strength = adjustments_dict.get('noise_reduction_strength', 0)
     if nr_strength > 0:
-        print("  Pipeline Step: Noise Reduction...")
+        logger.debug("Pipeline Step: Noise Reduction...")
         current_image = advanced_adjuster.apply_noise_reduction(current_image, strength=nr_strength)
         if not check_img("Noise Reduction"): return None
-        print("  Pipeline Step: Noise Reduction Done.")
+        logger.debug("Pipeline Step: Noise Reduction Done.")
 
     # Add other adjustments here in the desired order...
     # e.g., Vignette, Grain (Grain might be better applied last or handled by preset logic)
 
-    print("--- Adjustment Pipeline Finished ---")
+    logger.debug("Adjustment pipeline finished.")
     return current_image
 
 

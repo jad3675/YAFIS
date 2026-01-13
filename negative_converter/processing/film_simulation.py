@@ -6,40 +6,60 @@ import glob
 import json
 import concurrent.futures
 import math
-import os # For cpu_count
-# Use centralized GPU detection and logger
-from negative_converter.utils.gpu import GPU_ENABLED, xp, cp_module # Import cp_module as well
+
+from negative_converter.utils.gpu import GPU_ENABLED, xp, cp_module
+from negative_converter.utils.imaging import apply_curve
 from negative_converter.utils.logger import get_logger
 
 logger = get_logger(__name__)
-cp = cp_module # Assign cp_module to cp for local use if needed, otherwise use xp
+cp = cp_module  # Convenience alias; prefer xp for backend-agnostic ops
 
-# Import the centralized adjustments - MOVED inside _apply_full_preset to break circular import
-# from .adjustments import AdvancedAdjustments
 
-# Import the new utility function
-import sys
-import os
-# Use centralized imaging utility
-from negative_converter.utils.imaging import apply_curve
+def _validate_film_preset(preset_data, source="<unknown>"):
+    """
+    Validate a film preset payload.
+
+    Required:
+      - id: str (will be injected from filename if missing)
+      - parameters: dict
+
+    Returns:
+      (ok: bool, preset: dict|None)
+    """
+    if not isinstance(preset_data, dict):
+        logger.warning("Invalid film preset from %s: expected dict, got %s", source, type(preset_data))
+        return False, None
+
+    preset_id = preset_data.get("id")
+    if preset_id is not None and (not isinstance(preset_id, str) or not preset_id.strip()):
+        logger.warning("Invalid film preset from %s: invalid 'id'", source)
+        return False, None
+
+    params = preset_data.get("parameters")
+    if not isinstance(params, dict):
+        logger.warning("Invalid film preset '%s' from %s: missing/invalid 'parameters'", preset_id or "<missing-id>", source)
+        return False, None
+
+    return True, preset_data
 
 # --- Helper Functions (from Section 5.3) ---
 
 def convert_to_linear_rgb(image):
-    """Convert from sRGB to linear RGB (GPU/CPU)"""
-    if image is None or image.size == 0: return image
-    if GPU_ENABLED:
-        xp = cp; img_arr = xp.asarray(image, dtype=xp.float32) / 255.0
-    else:
-        xp = np; img_arr = image.astype(xp.float32) / 255.0
+    """Convert from sRGB to linear RGB (GPU/CPU). Returns float32 array (CuPy or NumPy)."""
+    if image is None or image.size == 0:
+        return image
+
+    backend = cp if GPU_ENABLED else np
+    img_arr = backend.asarray(image, dtype=backend.float32) / 255.0
     try:
-        linear_arr = xp.power(img_arr, 2.2) * 255.0
-        # Return CuPy array if GPU, NumPy if CPU
-        return linear_arr
-    except Exception as e:
-        logger.error(f"Linear Conversion failed ({'GPU' if GPU_ENABLED else 'CPU'}): {e}. Falling back.")
-        if GPU_ENABLED: xp = np; img_arr = image.astype(xp.float32) / 255.0; linear_arr = xp.power(img_arr, 2.2) * 255.0; return linear_arr # Fallback logic remains complex
-        else: return image.astype(np.float32) # Return float CPU if CPU failed? Or original?
+        return backend.power(img_arr, 2.2) * 255.0
+    except Exception:
+        logger.exception(
+            "Linear conversion failed (%s). Falling back to CPU.",
+            "GPU" if GPU_ENABLED else "CPU",
+        )
+        img_arr_cpu = image.astype(np.float32) / 255.0
+        return np.power(img_arr_cpu, 2.2) * 255.0
 
 def convert_to_srgb(linear_image):
     """Convert from linear RGB float back to sRGB uint8 for display (GPU/CPU)"""
@@ -52,17 +72,20 @@ def convert_to_srgb(linear_image):
     try:
         # Ensure input is float32
         linear_float = xp.asarray(linear_image_backend, dtype=xp.float32) / 255.0
+        # Guard against negatives before gamma (prevents NaNs and RuntimeWarnings)
+        linear_float = xp.clip(linear_float, 0.0, None)
         srgb_float = xp.power(linear_float, 1.0/2.2)
         srgb_float_scaled = xp.clip(srgb_float * 255.0, 0, 255)
         # Convert final result to uint8 NumPy
         return (xp.asnumpy(srgb_float_scaled) if xp == cp else srgb_float_scaled).astype(np.uint8)
-    except Exception as e:
-        logger.error(f"sRGB Conversion to uint8 failed ({'GPU' if xp == cp else 'CPU'}): {e}. Trying CPU fallback.")
+    except Exception:
+        logger.exception("sRGB conversion to uint8 failed (%s). Trying CPU fallback.", "GPU" if xp == cp else "CPU")
         # Fallback to CPU if GPU failed or if CPU failed initially (though less likely)
         xp_fallback = np
         linear_image_np = cp.asnumpy(linear_image_backend) if is_cupy_input else linear_image_backend
         try:
             linear_float_fb = linear_image_np.astype(xp_fallback.float32) / 255.0
+            linear_float_fb = xp_fallback.clip(linear_float_fb, 0.0, None)
             srgb_fb = xp_fallback.power(linear_float_fb, 1.0/2.2)
             return xp_fallback.clip(srgb_fb * 255.0, 0, 255).astype(xp_fallback.uint8)
         except Exception as e_cpu:
@@ -81,17 +104,20 @@ def convert_to_srgb_float(linear_image_float):
     try:
         # Ensure input is float32
         linear_float_norm = xp.asarray(linear_image_backend, dtype=xp.float32) / 255.0
+        # Guard against negatives before gamma (prevents NaNs and RuntimeWarnings)
+        linear_float_norm = xp.clip(linear_float_norm, 0.0, None)
         srgb_float_norm = xp.power(linear_float_norm, 1.0/2.2)
         srgb_float_scaled = srgb_float_norm * 255.0
         # Return float result (CuPy or NumPy)
         return srgb_float_scaled
-    except Exception as e:
-        logger.error(f"Linear to sRGB Float Conversion failed ({'GPU' if xp == cp else 'CPU'}): {e}. Trying CPU fallback.")
+    except Exception:
+        logger.exception("Linear to sRGB float conversion failed (%s). Trying CPU fallback.", "GPU" if xp == cp else "CPU")
         # Fallback to CPU if GPU failed or if CPU failed initially
         xp_fallback = np
         linear_image_np = cp.asnumpy(linear_image_backend) if is_cupy_input else linear_image_backend
         try:
             linear_float_fb_norm = linear_image_np.astype(xp_fallback.float32) / 255.0
+            linear_float_fb_norm = xp_fallback.clip(linear_float_fb_norm, 0.0, None)
             srgb_fb_norm = xp_fallback.power(linear_float_fb_norm, 1.0/2.2)
             return srgb_fb_norm * 255.0 # Return NumPy float
         except Exception as e_cpu:
@@ -115,8 +141,8 @@ def apply_color_matrix(rgb_image, matrix):
             pixels_gpu = img_gpu.reshape(-1, 3)
             transformed_gpu = xp.dot(pixels_gpu, matrix_gpu.T)
             return transformed_gpu.reshape(h, w, 3) # Return CuPy float
-        except Exception as e:
-            logger.error(f"Color Matrix failed (GPU): {e}. Falling back to CPU.")
+        except Exception:
+            logger.exception("Color matrix failed (GPU). Falling back to CPU.")
             # Fallback needs NumPy input
             rgb_image_np = cp.asnumpy(rgb_image) if is_cupy_input else rgb_image
             xp = np # Switch to NumPy for fallback
@@ -186,8 +212,8 @@ def apply_dynamic_range(image_float, compression, shadow_preservation, highlight
         # Convert final RGB result back to float (matching input type)
         return xp.asarray(rgb_result_uint8_np, dtype=xp.float32)
 
-    except Exception as e:
-        logger.error(f"Dynamic Range application failed ({'GPU' if is_cupy_input else 'CPU'}): {e}.")
+    except Exception:
+        logger.exception("Dynamic Range application failed (%s).", "GPU" if is_cupy_input else "CPU")
         # Fallback: If GPU failed, try CPU if input was GPU
         if is_cupy_input:
             logger.info("Dynamic Range: Falling back to CPU.")
@@ -242,22 +268,31 @@ class FilmPresetManager:
         self.load_presets()
 
     def load_presets(self):
-        """Load all presets from preset directory"""
+        """Load all presets from preset directory (validated)."""
         self.presets = {}
         if not os.path.isdir(self.preset_directory):
-            logger.warning(f"Preset directory not found: {self.preset_directory}")
+            logger.warning("Preset directory not found: %s", self.preset_directory)
             return
+
         preset_files = glob.glob(os.path.join(self.preset_directory, "*.json"))
         for preset_file in preset_files:
+            source = os.path.basename(preset_file)
             try:
-                with open(preset_file, 'r') as f:
+                with open(preset_file, "r", encoding="utf-8") as f:
                     preset_data = json.load(f)
-                    preset_id = preset_data.get("id", os.path.splitext(os.path.basename(preset_file))[0])
-                    preset_data["id"] = preset_id
-                    self.presets[preset_id] = preset_data
-            except Exception as e:
-                logger.error(f"Error loading preset {preset_file}: {e}")
-        logger.info(f"Loaded {len(self.presets)} film presets.")
+
+                preset_id = preset_data.get("id") or os.path.splitext(source)[0]
+                preset_data["id"] = preset_id
+
+                ok, validated = _validate_film_preset(preset_data, source=source)
+                if ok:
+                    self.presets[preset_id] = validated
+            except json.JSONDecodeError:
+                logger.exception("Error decoding JSON for film preset: %s", source)
+            except Exception:
+                logger.exception("Error loading film preset: %s", source)
+
+        logger.info("Loaded %s film presets.", len(self.presets))
 
 
     def get_preset(self, preset_id):
@@ -286,23 +321,26 @@ class FilmPresetManager:
         if image is None or image.size == 0: return image
 
         preset_data = None
-        preset_id_str = "N/A" # For logging
+        preset_id_str = "N/A"  # For logging
         if isinstance(preset, str):
             preset_id_str = preset
             preset_data = self.get_preset(preset)
             if not preset_data:
-                logger.warning(f"Film preset '{preset_id_str}' not found.")
+                logger.warning("Film preset '%s' not found.", preset_id_str)
                 return image.copy()
-        elif isinstance(preset, dict) and "parameters" in preset:
-             preset_data = preset
-             preset_id_str = preset_data.get("id", "N/A")
+        elif isinstance(preset, dict):
+            preset_data = preset
+            preset_id_str = preset_data.get("id", "N/A")
         else:
-             logger.warning("Invalid preset format passed to apply_preset.")
-             return image.copy()
+            logger.warning("Invalid preset format passed to apply_preset.")
+            return image.copy()
 
-        if "parameters" not in preset_data:
-             logger.warning(f"Preset '{preset_id_str}' has no 'parameters' key.")
-             return image.copy()
+        ok, validated = _validate_film_preset(preset_data, source=f"apply_preset:{preset_id_str}")
+        if not ok:
+            logger.warning("Film preset '%s' is invalid. Skipping.", preset_id_str)
+            return image.copy()
+
+        preset_data = validated
 
         # Make a deep copy to avoid modifying the original preset dict
         import copy
@@ -326,19 +364,17 @@ class FilmPresetManager:
              params["grainParams"]["intensity"] = base_intensity * grain_scale
              logger.debug(f"  Injected grain_scale {grain_scale}, base intensity {base_intensity}, resulting intensity {params['grainParams']['intensity']}")
         # --- Apply preset sequentially to the whole image ---
-        logger.info(f"Applying film preset '{preset_id_str}' sequentially...")
+        logger.info("Applying film preset '%s' sequentially...", preset_id_str)
         try:
             processed_image = self._apply_full_preset(image, params)
             if processed_image is None:
-                 logger.error(f"_apply_full_preset returned None for '{preset_id_str}'.")
-                 return image.copy() # Return original on error
-        except Exception as e:
-             logger.exception(f"Error applying film preset '{preset_id_str}': {e}") # Use exception to log traceback
-             # import traceback # No longer needed
-             # traceback.print_exc() # No longer needed
-             return image.copy() # Return original on error
+                logger.error("_apply_full_preset returned None for '%s'.", preset_id_str)
+                return image.copy()
+        except Exception:
+            logger.exception("Error applying film preset '%s'.", preset_id_str)
+            return image.copy()
 
-        logger.info(f"Sequential processing finished for film preset '{preset_id_str}'.")
+        logger.info("Sequential processing finished for film preset '%s'.", preset_id_str)
 
         # Blend with original based on intensity
         if 0.0 <= intensity < 0.99:
@@ -488,6 +524,6 @@ class FilmPresetManager:
             # Reload presets to include the new one? Or just add it?
             self.presets[preset_id] = preset_data
             return True
-        except Exception as e:
-            logger.error(f"Error saving preset {preset_id}: {e}")
+        except Exception:
+            logger.exception("Error saving preset %s", preset_id)
             return False

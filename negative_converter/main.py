@@ -12,8 +12,9 @@ if package_dir not in sys.path:
 
 # Import settings *before* other components that might use them or the logger
 from negative_converter.config import settings
-# Logging is configured implicitly when utils.logger is imported by other modules.
-# No explicit setup call needed here.
+from negative_converter.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 # Import the MainWindow class from the ui subpackage
 from negative_converter.ui.main_window import MainWindow
@@ -23,11 +24,8 @@ def main():
     """Main function to run the application."""
 
     # --- Logging ---
-    # Logging is configured automatically when 'utils.logger' is imported
-    # by any component (e.g., MainWindow indirectly).
     # The level is determined by 'config.settings.LOGGING_LEVEL'.
-    # We can optionally add a print statement here to confirm the level used.
-    print(f"Logging level set to: {settings.LOGGING_LEVEL} (via config/settings.py)")
+    logger.info("Logging level set to: %s (via config/settings.py)", settings.LOGGING_LEVEL)
 
     # Create the Qt Application
     app = QApplication(sys.argv)

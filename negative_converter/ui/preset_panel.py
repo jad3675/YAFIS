@@ -1,11 +1,13 @@
 # Film simulation controls
 import os
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-                             QLabel, QPushButton, QSlider, QSizePolicy)
+                             QLabel, QPushButton, QSlider, QSizePolicy, QScrollArea)
 from PyQt6.QtCore import Qt, QSize, pyqtSignal
 from PyQt6.QtGui import QIcon
 import json # Added for dummy presets in main
 import numpy as np # Added for dummy image in main
+
+from negative_converter.utils.logger import get_logger
 
 # Assuming FilmPresetManager is in the processing package
 # Adjust the import path based on your final project structure
@@ -16,6 +18,8 @@ except ImportError:
     import sys
     sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
     from processing.film_simulation import FilmPresetManager
+
+logger = get_logger(__name__)
 
 
 class FilmPresetPanel(QWidget): # Renamed back
@@ -53,11 +57,18 @@ class FilmPresetPanel(QWidget): # Renamed back
         film_presets_group_label.setStyleSheet("font-weight: bold; margin-bottom: 5px;")
         main_layout.addWidget(film_presets_group_label)
 
-        # Using QGridLayout for film preset buttons
-        self.presets_layout = QGridLayout() # Renamed back from film_presets_layout
+        # Scrollable container for many presets
+        self._presets_container = QWidget()
+        self.presets_layout = QGridLayout(self._presets_container) # Renamed back from film_presets_layout
         self.presets_layout.setSpacing(5) # Spacing between buttons
         self.preset_buttons = {} # Renamed back from film_preset_buttons
-        main_layout.addLayout(self.presets_layout)
+
+        self._presets_scroll = QScrollArea()
+        self._presets_scroll.setWidgetResizable(True)
+        self._presets_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._presets_scroll.setWidget(self._presets_container)
+
+        main_layout.addWidget(self._presets_scroll, 1)
 
         # --- Removed Photo Preset Selector Area ---
 
@@ -101,23 +112,14 @@ class FilmPresetPanel(QWidget): # Renamed back
         self.advanced_button.setEnabled(False) # Disabled for now
         # main_layout.addWidget(self.advanced_button) # Optional: Hide if not functional
 
-        # Add stretch to push buttons to the bottom
-        main_layout.addStretch(1)
-
         # --- Action Buttons Area ---
         button_layout = QHBoxLayout()
-        self.preview_button = QPushButton("Preview")
-        self.preview_button.setToolTip("Update the main image preview with the current settings.")
-        self.preview_button.clicked.connect(self.trigger_preview)
-        self.preview_button.setEnabled(False) # Disabled until a preset is selected
-
         self.apply_button = QPushButton("Apply")
         self.apply_button.setToolTip("Apply the current film simulation settings permanently to the image.") # Updated tooltip
         self.apply_button.clicked.connect(self.trigger_apply)
         self.apply_button.setEnabled(False) # Disabled until a preset is selected
 
         button_layout.addStretch(1) # Push buttons to the right
-        button_layout.addWidget(self.preview_button)
         button_layout.addWidget(self.apply_button)
         main_layout.addLayout(button_layout)
 
@@ -203,11 +205,10 @@ class FilmPresetPanel(QWidget): # Renamed back
 
             self.current_preset_id = selected_preset_id
             # Removed self.current_preset_type = 'film'
-            self.preview_button.setEnabled(True)
             self.apply_button.setEnabled(True)
             self.grain_slider.setEnabled(True) # Ensure grain is enabled
             self.grain_label.setEnabled(True)
-            print(f"Preset selected: {self.current_preset_id}") # Updated log
+            logger.debug("Film preset selected. preset_id=%s", self.current_preset_id)
             self.trigger_preview()
         else:
             # Deselected
@@ -220,14 +221,13 @@ class FilmPresetPanel(QWidget): # Renamed back
         """Resets the UI state when no preset is selected."""
         self.current_preset_id = None
         # Removed self.current_preset_type = None
-        self.preview_button.setEnabled(False)
         self.apply_button.setEnabled(False)
         self.grain_slider.setEnabled(True) # Ensure grain slider is enabled
         self.grain_label.setEnabled(True)
         # Uncheck all buttons
         for button in self.preset_buttons.values(): button.setChecked(False)
         # Removed unchecking photo buttons
-        print("Preset deselected.")
+        logger.debug("Film preset deselected.")
         self.trigger_preview() # Trigger preview to show original
 
 
@@ -250,7 +250,7 @@ class FilmPresetPanel(QWidget): # Renamed back
 
     def on_advanced_clicked(self):
         """Show advanced parameters dialog (Placeholder)"""
-        print("Advanced parameters clicked (Not Implemented)")
+        logger.debug("Advanced parameters clicked (not implemented).")
         # Implementation would involve creating a QDialog
         # to show/edit parameters from self.preset_manager.get_preset(self.current_preset_id)
 
@@ -260,15 +260,16 @@ class FilmPresetPanel(QWidget): # Renamed back
         # This panel only needs to emit the selected preset details.
 
         if self.current_preset_id:
-            # A preset is selected
-            print(f"Triggering film preview for {self.current_preset_id} with intensity {self.intensity:.2f}, grain {self.grain_scale:.1f}x")
-            # Emit signal with type 'film'
+            logger.debug(
+                "Triggering film preview. preset_id=%s intensity=%.2f grain_scale=%.1fx",
+                self.current_preset_id,
+                self.intensity,
+                self.grain_scale,
+            )
             # Emit signal with type 'film' - image object is None here, MainWindow will provide it.
             self.preview_requested.emit(None, 'film', self.current_preset_id, self.intensity, self.grain_scale)
         else:
-            # No preset is selected (deselected state)
-            print("Triggering preview for original image (no preset).")
-            # Emit signal with None for type and id. Intensity/grain don't matter here.
+            logger.debug("Triggering preview for original image (no film preset).")
             # Emit signal with None for type and id - image object is None here.
             self.preview_requested.emit(None, None, None, 0.0, 0.0)
 
@@ -276,13 +277,18 @@ class FilmPresetPanel(QWidget): # Renamed back
     def trigger_apply(self):
         """Emit signal to apply changes permanently"""
         if self.current_preset_id:
-            print(f"Triggering apply for {self.current_preset_id} with intensity {self.intensity:.2f}, grain {self.grain_scale:.1f}x")
+            logger.debug(
+                "Triggering film apply. preset_id=%s intensity=%.2f grain_scale=%.1fx",
+                self.current_preset_id,
+                self.intensity,
+                self.grain_scale,
+            )
             # The main window slot will handle getting the current image.
             # Emit signal with type 'film' - image object is None here.
             self.apply_requested.emit(None, 'film', self.current_preset_id, self.intensity, self.grain_scale)
             # Removed image fetching logic
         else:
-            print("Apply trigger: No preset selected.")
+            logger.debug("Apply trigger ignored: no film preset selected.")
 
     def get_modified_preset_params(self, preset_id, grain_scale): # Renamed back
         """Helper to get preset parameters modified by UI controls (like grain)"""

@@ -6,42 +6,73 @@ import numpy as np
 import cv2
 import concurrent.futures
 import math
-# import os # Already imported below
+
+from negative_converter.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 try:
     import appdirs
 except ImportError:
-    appdirs = None # Handle case where appdirs is not installed
+    appdirs = None  # Handle case where appdirs is not installed
 
-# Import necessary adjustment functions - MOVED inside _apply_full_photo_preset
-# from .adjustments import ImageAdjustments, AdvancedAdjustments
-# Import specific functions needed from film_simulation (or utils if refactored)
-# from .film_simulation import apply_film_grain # Removed apply_color_balance, now in AdvancedAdjustments - Grain moved to AdvancedAdjustments
+
+def _validate_photo_preset(preset_data, source="<unknown>"):
+    """
+    Validate a photo preset payload.
+
+    Required:
+      - id: str
+      - parameters: dict
+
+    Returns:
+      (ok: bool, preset: dict|None)
+    """
+    if not isinstance(preset_data, dict):
+        logger.warning("Invalid photo preset from %s: expected dict, got %s", source, type(preset_data))
+        return False, None
+
+    preset_id = preset_data.get("id")
+    if not isinstance(preset_id, str) or not preset_id.strip():
+        logger.warning("Invalid photo preset from %s: missing/invalid 'id'", source)
+        return False, None
+
+    params = preset_data.get("parameters")
+    if not isinstance(params, dict):
+        logger.warning("Invalid photo preset '%s' from %s: missing/invalid 'parameters'", preset_id, source)
+        return False, None
+
+    # Optional fields
+    name = preset_data.get("name")
+    if name is not None and not isinstance(name, str):
+        logger.warning("Photo preset '%s' from %s: 'name' should be a string; ignoring invalid value", preset_id, source)
+        preset_data = dict(preset_data)
+        preset_data.pop("name", None)
+
+    return True, preset_data
+
 
 class PhotoPresetManager:
     """Manages photo presets defined in JSON files."""
+
     def __init__(self, presets_file=None):
         if presets_file:
-            # Allow overriding for testing or specific cases
             self.presets_file = presets_file
         elif appdirs:
-            # Use appdirs to find the standard user data directory
             app_name = "NegativeConverter"
-            app_author = "NegativeConverter" # Can be same as app_name or your name/org
+            app_author = "NegativeConverter"
             data_dir = appdirs.user_data_dir(app_name, app_author)
-            # Ensure the directory exists
             os.makedirs(data_dir, exist_ok=True)
             self.presets_file = os.path.join(data_dir, "photo_presets.json")
-            print(f"Using user preset file location: {self.presets_file}")
+            logger.info("Using user preset file location: %s", self.presets_file)
         else:
             # Fallback if appdirs is not installed: use project root (original behavior)
-            print("Warning: 'appdirs' library not found. Falling back to project root for presets.")
+            logger.warning("'appdirs' library not found. Falling back to project root for presets.")
             script_dir = os.path.dirname(__file__)
-            self.presets_file = os.path.abspath(os.path.join(
-                script_dir, "..", "..", "photo_presets.json"
-            ))
+            self.presets_file = os.path.abspath(os.path.join(script_dir, "..", "..", "photo_presets.json"))
 
         self.presets = {}
-        self.default_presets = {} # Store defaults separately
+        self.default_presets = {}  # Store defaults separately
         self.load_presets()
 
     def load_presets(self):
@@ -49,50 +80,59 @@ class PhotoPresetManager:
         default_presets = {}
         user_presets = {}
 
-        # 1. Load Default Presets (Assuming they are in config/presets like film sims)
-        #    We might need a way to distinguish them, e.g., a "type": "photo" key.
+        # 1. Load Default Presets
         script_dir = os.path.dirname(__file__)
-        default_presets_dir = os.path.abspath(os.path.join(script_dir, "..", "config", "presets", "photo")) # Point to photo subdirectory
+        default_presets_dir = os.path.abspath(os.path.join(script_dir, "..", "config", "presets", "photo"))
         if os.path.isdir(default_presets_dir):
             json_files = glob.glob(os.path.join(default_presets_dir, "*.json"))
             for file_path in json_files:
+                source = os.path.basename(file_path)
                 try:
-                    with open(file_path, 'r', encoding='utf-8') as f:
+                    with open(file_path, "r", encoding="utf-8") as f:
                         preset_data = json.load(f)
-                        # Load any JSON file in this directory as a default photo preset
-                        # No need to check "type" key anymore as they are in the dedicated folder
-                        if "id" in preset_data:
-                             default_presets[preset_data["id"]] = preset_data
-                except Exception as e:
-                    print(f"Error loading default preset from {os.path.basename(file_path)}: {e}")
-            print(f"Loaded {len(default_presets)} default photo presets from {default_presets_dir}.")
+
+                    ok, validated = _validate_photo_preset(preset_data, source=source)
+                    if ok:
+                        default_presets[validated["id"]] = validated
+                except json.JSONDecodeError:
+                    logger.exception("Error decoding JSON for default photo preset: %s", source)
+                except Exception:
+                    logger.exception("Error loading default photo preset: %s", source)
+
+            logger.info("Loaded %s default photo presets from %s.", len(default_presets), default_presets_dir)
         else:
-             print(f"Warning: Default presets directory not found: {default_presets_dir}")
+            logger.warning("Default photo presets directory not found: %s", default_presets_dir)
 
-
-        # 2. Load User Presets (from the location determined by __init__)
+        # 2. Load User Presets
         if os.path.isfile(self.presets_file):
             try:
-                with open(self.presets_file, 'r', encoding='utf-8') as f:
+                with open(self.presets_file, "r", encoding="utf-8") as f:
                     user_preset_list = json.load(f)
-                    # Ensure it's a list and presets have IDs
-                    if isinstance(user_preset_list, list):
-                        user_presets = {preset["id"]: preset for preset in user_preset_list if isinstance(preset, dict) and "id" in preset}
-                        print(f"Loaded {len(user_presets)} user photo presets from {self.presets_file}.")
-                    else:
-                        print(f"Warning: User presets file ({self.presets_file}) does not contain a valid JSON list.")
-            except json.JSONDecodeError as e:
-                print(f"Error decoding JSON from user presets file {self.presets_file}: {e}")
-            except Exception as e:
-                print(f"Error loading user presets from {self.presets_file}: {e}")
+
+                if isinstance(user_preset_list, list):
+                    for idx, preset in enumerate(user_preset_list):
+                        source = f"{self.presets_file}#{idx}"
+                        ok, validated = _validate_photo_preset(preset, source=source)
+                        if ok:
+                            user_presets[validated["id"]] = validated
+                    logger.info("Loaded %s user photo presets from %s.", len(user_presets), self.presets_file)
+                else:
+                    logger.warning("User presets file (%s) does not contain a JSON list.", self.presets_file)
+            except json.JSONDecodeError:
+                logger.exception("Error decoding JSON from user presets file %s", self.presets_file)
+            except Exception:
+                logger.exception("Error loading user presets from %s", self.presets_file)
         else:
-             print(f"No user presets file found at {self.presets_file}. Only default presets will be available initially.")
+            logger.info(
+                "No user presets file found at %s. Only default presets will be available initially.",
+                self.presets_file,
+            )
 
         # 3. Store defaults and create merged list
-        self.default_presets = default_presets # Keep defaults separate
-        self.presets = self.default_presets.copy() # Start with defaults
-        self.presets.update(user_presets) # Update with user presets (overwriting defaults with same ID)
-        print(f"Total photo presets available: {len(self.presets)}")
+        self.default_presets = default_presets
+        self.presets = self.default_presets.copy()
+        self.presets.update(user_presets)  # user presets overwrite defaults with same ID
+        logger.info("Total photo presets available: %s", len(self.presets))
 
     def get_preset(self, preset_id):
         """Retrieve a specific preset by its ID."""
@@ -103,79 +143,77 @@ class PhotoPresetManager:
         return self.presets.copy()
 
     def _save_presets_to_file(self):
-        """Save the current state of self.presets back to the JSON file."""
+        """Save user-specific presets back to the JSON file."""
         try:
-            # Identify user-specific presets (new or modified compared to defaults)
             user_presets_to_save = []
             for preset_id, preset_data in self.presets.items():
-                # Check if it's a new preset (not in defaults) or if it's different from the default
                 if preset_id not in self.default_presets or preset_data != self.default_presets[preset_id]:
-                    user_presets_to_save.append(preset_data)
+                    ok, validated = _validate_photo_preset(preset_data, source=f"in-memory:{preset_id}")
+                    if ok:
+                        user_presets_to_save.append(validated)
+                    else:
+                        logger.warning("Skipping invalid preset during save: %s", preset_id)
 
-            # Save only the user-specific presets to the user file
-            preset_list = user_presets_to_save
-            with open(self.presets_file, 'w', encoding='utf-8') as f:
-                json.dump(preset_list, f, indent=2) # Use indent for readability
-            print(f"Successfully saved {len(preset_list)} presets to {self.presets_file}")
+            with open(self.presets_file, "w", encoding="utf-8") as f:
+                json.dump(user_presets_to_save, f, indent=2)
+
+            logger.info("Saved %s user presets to %s", len(user_presets_to_save), self.presets_file)
             return True
-        except Exception as e:
-            print(f"Error saving presets to {self.presets_file}: {e}")
+        except Exception:
+            logger.exception("Error saving presets to %s", self.presets_file)
             return False
 
     def add_preset(self, preset_data):
         """Adds or updates a preset and saves the changes to the file."""
-        if not isinstance(preset_data, dict) or "id" not in preset_data:
-            print("Error: Invalid preset data provided to add_preset.")
+        ok, validated = _validate_photo_preset(preset_data, source="add_preset")
+        if not ok:
+            logger.error("Invalid preset data provided to add_preset.")
             return False
 
-        preset_id = preset_data["id"]
-        self.presets[preset_id] = preset_data # Add or overwrite
-        print(f"Preset '{preset_id}' added/updated in manager.")
+        preset_id = validated["id"]
+        self.presets[preset_id] = validated
+        logger.info("Preset '%s' added/updated in manager.", preset_id)
 
-        # Save the updated presets list back to the file
         return self._save_presets_to_file()
 
     def apply_photo_preset(self, image, preset_id, intensity=1.0):
         """Applies a loaded photo preset to an image sequentially (no tiling)."""
         if image is None or image.size == 0:
-            print("Warning: Cannot apply preset to empty image.")
+            logger.warning("Cannot apply preset to empty image.")
             return image
 
         preset_data = self.get_preset(preset_id)
         if not preset_data:
-            print(f"Warning: Photo preset '{preset_id}' not found.")
+            logger.warning("Photo preset '%s' not found.", preset_id)
             return image.copy()
 
-        if "parameters" not in preset_data:
-            print(f"Warning: Preset '{preset_id}' has no 'parameters' key.")
+        ok, validated = _validate_photo_preset(preset_data, source=f"manager:{preset_id}")
+        if not ok:
+            logger.warning("Photo preset '%s' is invalid. Skipping.", preset_id)
             return image.copy()
 
-        params = preset_data["parameters"]
+        params = validated["parameters"]
 
-        # --- Apply preset sequentially to the whole image ---
-        print(f"PhotoPreset Apply: Applying preset '{preset_id}' sequentially...")
+        logger.debug("Applying photo preset '%s' sequentially...", preset_id)
         try:
             processed_image = self._apply_full_photo_preset(image, params)
             if processed_image is None:
-                 print(f"PhotoPreset Error: _apply_full_photo_preset returned None for '{preset_id}'.")
-                 return image.copy() # Return original on error
-        except Exception as e:
-             print(f"PhotoPreset Error applying preset '{preset_id}': {e}")
-             import traceback
-             traceback.print_exc()
-             return image.copy() # Return original on error
-
-        print(f"PhotoPreset Apply: Sequential processing finished for preset '{preset_id}'.")
+                logger.error("_apply_full_photo_preset returned None for '%s'.", preset_id)
+                return image.copy()
+        except Exception:
+            logger.exception("Error applying photo preset '%s'.", preset_id)
+            return image.copy()
 
         # Blend with original based on intensity
         if 0.0 <= intensity < 0.99:
             original_image_float = image.astype(np.float32)
             processed_image_float = processed_image.astype(np.float32)
-            blended = cv2.addWeighted(original_image_float, 1.0 - intensity,
-                                      processed_image_float, intensity, 0)
+            blended = cv2.addWeighted(
+                original_image_float, 1.0 - intensity, processed_image_float, intensity, 0
+            )
             return np.clip(blended, 0, 255).astype(np.uint8)
-        else:
-            return processed_image # Return the fully processed uint8 image
+
+        return processed_image
 
     def _apply_full_photo_preset(self, image, params):
         # Import moved here to break circular dependency
@@ -187,7 +225,11 @@ class PhotoPresetManager:
 
         def check_image(step_name):
             if current_image is None:
-                print(f"PhotoPreset Error ({preset_id_str}): Image became None after step '{step_name}'. Aborting preset application.")
+                logger.error(
+                    "PhotoPreset Error (%s): Image became None after step '%s'. Aborting preset application.",
+                    preset_id_str,
+                    step_name,
+                )
                 return False
             return True
 
@@ -253,20 +295,20 @@ class PhotoPresetManager:
             if not check_image("Clarity"): return None
         if "grainParams" in params:
             gp = params["grainParams"]
-            # Call the static method from AdvancedAdjustments
-            # Note: apply_film_grain expects float32 input, but photo preset pipeline works on uint8.
-            # We need to convert to float, apply grain, then convert back.
-            current_image_float = current_image.astype(np.float32) # Error occurred here if current_image was None
-            processed_float = AdvancedAdjustments.apply_film_grain(current_image_float,
-                                             intensity=gp.get("intensity", 0),
-                                             size=gp.get("size", 0.5),
-                                             roughness=gp.get("roughness", 0.5))
-            if processed_float is None: # Check if grain application itself failed
-                 print(f"PhotoPreset Error ({preset_id_str}): Grain application returned None.")
-                 return None
-            # Convert back to uint8 after applying grain
-            current_image = np.clip(processed_float, 0, 255).astype(np.uint8)
-            if not check_image("Grain"): return None # Should not be None here, but check anyway
+            # apply_film_grain expects float in 0..1. Convert to float, apply grain, convert back to uint8.
+            current_image_float01 = current_image.astype(np.float32) / 255.0
+            processed_float01 = AdvancedAdjustments.apply_film_grain(
+                current_image_float01,
+                intensity=gp.get("intensity", 0),
+                size=gp.get("size", 0.5),
+                roughness=gp.get("roughness", 0.5),
+            )
+            if processed_float01 is None:
+                logger.error("PhotoPreset Error (%s): Grain application returned None.", preset_id_str)
+                return None
+            current_image = (np.clip(processed_float01, 0.0, 1.0) * 255.0).astype(np.uint8)
+            if not check_image("Grain"):
+                return None
         if "specialEffects" in params and "vignette" in params["specialEffects"]: # NEW
             vig = params["specialEffects"]["vignette"]
             current_image = AdvancedAdjustments.apply_vignette(
@@ -333,8 +375,8 @@ if __name__ == '__main__':
                 cv2.imshow(f"Original vs {preset_id_to_test}", cv2.cvtColor(combined, cv2.COLOR_RGB2BGR))
                 cv2.waitKey(0)
                 cv2.destroyAllWindows()
-            except Exception as display_e:
-                print(f"Could not display image: {display_e}")
+            except Exception:
+                logger.exception("Could not display image.")
         else:
             print(f"Failed to apply preset '{preset_id_to_test}'.")
     else:

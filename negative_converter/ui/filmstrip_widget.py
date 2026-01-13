@@ -8,6 +8,9 @@ from PyQt6.QtCore import (QSize, Qt, QThread, QObject, pyqtSignal, pyqtSlot,
                           QMutex, QMutexLocker, QMetaObject, QRunnable, QThreadPool)
 from ..config import settings as app_settings # Import settings
 
+from ..utils.logger import get_logger
+logger = get_logger(__name__)
+
 # --- Thumbnail Loading Worker ---
 
 class ThumbnailLoader(QObject):
@@ -186,7 +189,7 @@ class BatchFilmstripWidget(QWidget):
             # Start loading thumbnail
             self._load_thumbnail(path)
 
-        print(f"Added {len(self._image_paths)} images to filmstrip. Loading thumbnails...")
+        logger.info("Added %s images to filmstrip. Loading thumbnails...", len(self._image_paths))
 
     def _load_thumbnail(self, file_path):
         """Initiate loading for a single thumbnail."""
@@ -219,7 +222,7 @@ class BatchFilmstripWidget(QWidget):
     @pyqtSlot(str, str)
     def _handle_thumbnail_error(self, path, error_message):
         """Handle errors during thumbnail loading."""
-        print(f"Error loading thumbnail for {os.path.basename(path)}: {error_message}")
+        logger.warning("Error loading thumbnail for %s: %s", os.path.basename(path), error_message)
         if path in self._list_items:
              # Optionally set an error icon
              error_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxWarning)
@@ -239,7 +242,7 @@ class BatchFilmstripWidget(QWidget):
         self._list_items = {}
         self._emit_selection_change() # Emit empty list for selection
         self._emit_checked_items_change() # Emit empty list for checked items
-        print("Filmstrip cleared.")
+        logger.debug("Filmstrip cleared.")
 
     def get_selected_image_paths(self):
         """Return a list of full paths for the selected images."""
@@ -271,7 +274,7 @@ class BatchFilmstripWidget(QWidget):
 
     def closeEvent(self, event):
         """Clean up thumbnail loading on widget close."""
-        print("Cancelling active thumbnail loaders...")
+        logger.debug("Cancelling active thumbnail loaders...")
         # Cancel any loaders still running
         for loader in self._active_loaders.values():
             loader.cancel()
@@ -279,7 +282,7 @@ class BatchFilmstripWidget(QWidget):
         # Optional: Wait for thread pool tasks to finish, but might hang UI.
         # Cancellation should be enough for loaders to exit quickly.
         # self._thread_pool.waitForDone(3000) # Use with caution
-        print("Thumbnail loaders cancelled.")
+        logger.debug("Thumbnail loaders cancelled.")
         super().closeEvent(event)
 
     def update_thumbnail_size(self):
@@ -288,7 +291,7 @@ class BatchFilmstripWidget(QWidget):
         new_size = QSize(new_size_val, new_size_val)
 
         if new_size != self.thumbnail_size:
-            print(f"Updating filmstrip thumbnail size to {new_size_val}x{new_size_val}...")
+            logger.info("Updating filmstrip thumbnail size to %sx%s...", new_size_val, new_size_val)
             self.thumbnail_size = new_size
             self.list_widget.setIconSize(self.thumbnail_size)
 
@@ -296,7 +299,7 @@ class BatchFilmstripWidget(QWidget):
             # This will cancel existing loaders and start new ones with the correct size.
             current_paths = self.get_all_image_paths()
             if current_paths:
-                print("Reloading filmstrip images to apply new thumbnail size...")
+                logger.info("Reloading filmstrip images to apply new thumbnail size...")
                 # Store checked state before clearing
                 checked_before_reload = self.get_checked_image_paths()
                 self.add_images(current_paths) # This calls clear_images first
@@ -316,7 +319,7 @@ class BatchFilmstripWidget(QWidget):
                 # Manually emit the checked items change once after restoring
                 self._emit_checked_items_change()
 
-            print("Filmstrip thumbnail size update complete.")
+            logger.info("Filmstrip thumbnail size update complete.")
 
 # Example usage (for testing)
 # Example usage (for testing - requires QApplication)
@@ -335,7 +338,7 @@ if __name__ == '__main__':
     filmstrip.add_images(test_files)
 
     def on_selection(paths):
-        print("Selected paths:", paths)
+        logger.debug("Selected paths: %s", paths)
 
     filmstrip.selection_changed.connect(on_selection)
 

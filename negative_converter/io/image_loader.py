@@ -1,19 +1,22 @@
 # Image import functionality using Pillow
 import os
+import io
 import numpy as np
+
+from negative_converter.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 # Attempt to import Pillow (PIL)
 try:
     from PIL import Image, ImageOps, UnidentifiedImageError
-    # ImageOps is needed for exif_transpose
-    # UnidentifiedImageError is a specific Pillow error for bad formats
+
     PILLOW_AVAILABLE = True
 except ImportError:
     PILLOW_AVAILABLE = False
-    # Fallback message if Pillow isn't installed
-    print("[Image Loader Error] Pillow library not found. Image loading will not work. Install with 'pip install Pillow'")
-    # Define a dummy function if Pillow is absolutely required downstream
-    # but in this case, the application likely won't start without it.
+    logger.error(
+        "Pillow library not found. Image loading will not work. Install with 'pip install Pillow'."
+    )
 
 # Define the filter string for supported image formats for QFileDialog
 # Pillow supports a wider range, but keep this consistent for now unless expanded
@@ -35,15 +38,15 @@ def load_image(file_path):
                Returns (None, None, None) if loading fails or file not found.
     """
     if not PILLOW_AVAILABLE:
-        print("[Image Loader Error] Cannot load image: Pillow library is not available.")
+        logger.error("Cannot load image: Pillow library is not available.")
         return None, None, None
 
     if not isinstance(file_path, str) or not file_path:
-        print("[Image Loader Error] Invalid file path provided.")
+        logger.error("Invalid file path provided.")
         return None, None, None
 
     if not os.path.isfile(file_path):
-        print(f"[Image Loader Error] File not found at '{file_path}'")
+        logger.error("File not found at '%s'", file_path)
         return None, None, None
 
     try:
@@ -62,24 +65,48 @@ def load_image(file_path):
         img_oriented = ImageOps.exif_transpose(img)
         # Note: Pillow might issue warnings if EXIF data is corrupt, but usually proceeds.
 
-        # --- Color Profile Info (Extraction only for now) ---
-        icc_profile = img_oriented.info.get('icc_profile')
+        # --- Color Profile Handling ---
+        icc_profile = img_oriented.info.get("icc_profile")
+        apply_icc = False
+        try:
+            from ..config import settings as app_settings
+            apply_icc = bool(app_settings.UI_DEFAULTS.get("apply_embedded_icc_profile", False))
+        except Exception:
+            # Don't fail image loading due to settings import issues.
+            logger.exception("Failed to read ICC apply setting; defaulting to disabled.")
+
         if icc_profile:
-            # TODO: Implement actual color management using the profile if needed.
-            # For now, just log its presence. Requires libraries like littlecms (lcms2)
-            # via Pillow's ImageCms module or external libraries.
-            print(f"[Image Loader Info] Found embedded ICC profile ({len(icc_profile)} bytes). Profile is currently ignored.")
-            pass
-        else:
-            # Assume sRGB if no profile - this is standard behavior for many apps
-            # print("[Image Loader Info] No ICC profile found. Assuming sRGB.")
-            pass
+            if apply_icc:
+                try:
+                    # Convert from embedded profile to sRGB for consistent processing/display.
+                    from PIL import ImageCms
+                    src_profile = ImageCms.ImageCmsProfile(io.BytesIO(icc_profile))
+                    dst_profile = ImageCms.createProfile("sRGB")
+                    img_oriented = ImageCms.profileToProfile(
+                        img_oriented,
+                        src_profile,
+                        dst_profile,
+                        outputMode="RGB",
+                    )
+                    logger.info(
+                        "Applied embedded ICC profile (%s bytes) and converted to sRGB.",
+                        len(icc_profile),
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to apply embedded ICC profile (%s bytes); continuing without ICC conversion.",
+                        len(icc_profile),
+                    )
+            else:
+                logger.info(
+                    "Found embedded ICC profile (%s bytes). Profile is currently ignored.",
+                    len(icc_profile),
+                )
 
         # --- Ensure RGB Format ---
-        # Convert to RGB if it's not already (e.g., grayscale, RGBA, palette)
-        if img_oriented.mode != 'RGB':
-            print(f"[Image Loader Info] Converting image from mode '{img_oriented.mode}' to 'RGB'.")
-            img_rgb = img_oriented.convert('RGB')
+        if img_oriented.mode != "RGB":
+            logger.info("Converting image from mode '%s' to 'RGB'.", img_oriented.mode)
+            img_rgb = img_oriented.convert("RGB")
         else:
             img_rgb = img_oriented
 
@@ -88,14 +115,14 @@ def load_image(file_path):
         image_np = np.array(img_rgb)
 
         if image_np.size == 0:
-             print(f"Error: Loaded image is empty after processing: '{file_path}'")
-             # Close the image file handle if Pillow keeps it open
-             img.close()
-             img_oriented.close()
-             if img_rgb is not img_oriented: img_rgb.close()
-             return None, None, None
+            logger.error("Loaded image is empty after processing: '%s'", file_path)
+            img.close()
+            img_oriented.close()
+            if img_rgb is not img_oriented:
+                img_rgb.close()
+            return None, None, None
 
-        print(f"Successfully loaded and oriented image: '{file_path}'")
+        logger.info("Successfully loaded image: '%s'", file_path)
 
         # Close the image file handle opened by Pillow
         img.close()
@@ -107,22 +134,26 @@ def load_image(file_path):
         return image_np, original_mode, file_size
 
     except UnidentifiedImageError:
-        print(f"Error: Pillow could not identify image file format or file is corrupted: '{file_path}'")
+        logger.error(
+            "Pillow could not identify image file format or file is corrupted: '%s'",
+            file_path,
+        )
         return None, None, None
     except FileNotFoundError:
-        # Should be caught by os.path.isfile, but handle defensively
-        print(f"Error: File not found (exception): '{file_path}'")
+        logger.error("File not found (exception): '%s'", file_path)
         return None, None, None
-    except Exception as e:
-        # Catch any other unexpected errors during loading or conversion
-        print(f"Error loading image '{file_path}' with Pillow: {e}")
+    except Exception:
+        logger.exception("Error loading image '%s' with Pillow.", file_path)
         # Ensure image file handle is closed in case of error during processing
         try:
-            if 'img' in locals() and hasattr(img, 'close'): img.close()
-            if 'img_oriented' in locals() and hasattr(img_oriented, 'close') and img_oriented is not img: img_oriented.close()
-            if 'img_rgb' in locals() and hasattr(img_rgb, 'close') and img_rgb is not img_oriented: img_rgb.close()
-        except Exception as close_e:
-            print(f"Error closing image file during exception handling: {close_e}")
+            if "img" in locals() and hasattr(img, "close"):
+                img.close()
+            if "img_oriented" in locals() and hasattr(img_oriented, "close") and img_oriented is not img:
+                img_oriented.close()
+            if "img_rgb" in locals() and hasattr(img_rgb, "close") and img_rgb is not img_oriented:
+                img_rgb.close()
+        except Exception:
+            logger.exception("Error closing image file during exception handling.")
         return None, None, None
 
 # TODO: Add support for RAW files using rawpy if needed (requires rawpy library)

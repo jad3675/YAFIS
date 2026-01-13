@@ -1,11 +1,13 @@
 # Photo Style Preset controls
 import os
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-                             QLabel, QPushButton, QSlider, QSizePolicy, QInputDialog, QMessageBox) # Added QInputDialog, QMessageBox
+                             QLabel, QPushButton, QSlider, QSizePolicy, QInputDialog, QMessageBox, QScrollArea) # Added QInputDialog, QMessageBox
 from PyQt6.QtCore import Qt, QSize, pyqtSignal
 from PyQt6.QtGui import QIcon
 import json # Added for dummy presets in main
 import numpy as np # Added for dummy image in main
+
+from negative_converter.utils.logger import get_logger
 
 # Assuming PhotoPresetManager is in the processing package
 try:
@@ -15,6 +17,8 @@ except ImportError:
     import sys
     sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
     from processing.photo_presets import PhotoPresetManager
+
+logger = get_logger(__name__)
 
 
 class PhotoPresetPanel(QWidget):
@@ -51,11 +55,18 @@ class PhotoPresetPanel(QWidget):
         photo_presets_group_label.setStyleSheet("font-weight: bold; margin-bottom: 5px;")
         main_layout.addWidget(photo_presets_group_label)
 
-        # Using QGridLayout for photo preset buttons
-        self.presets_layout = QGridLayout()
+        # Scrollable container for many presets
+        self._presets_container = QWidget()
+        self.presets_layout = QGridLayout(self._presets_container)
         self.presets_layout.setSpacing(5) # Spacing between buttons
         self.preset_buttons = {} # Dictionary to store buttons by preset_id
-        main_layout.addLayout(self.presets_layout)
+
+        self._presets_scroll = QScrollArea()
+        self._presets_scroll.setWidgetResizable(True)
+        self._presets_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._presets_scroll.setWidget(self._presets_container)
+
+        main_layout.addWidget(self._presets_scroll, 1)
 
         # --- Sliders Area ---
         # Intensity slider
@@ -83,31 +94,14 @@ class PhotoPresetPanel(QWidget):
         # self.advanced_button.setEnabled(False)
         # main_layout.addWidget(self.advanced_button)
 
-        # Add stretch to push buttons to the bottom
-        main_layout.addStretch(1)
-
         # --- Action Buttons Area ---
         button_layout = QHBoxLayout()
-        self.preview_button = QPushButton("Preview")
-        self.preview_button.setToolTip("Update the main image preview with the current style settings.")
-        self.preview_button.clicked.connect(self.trigger_preview)
-        self.preview_button.setEnabled(False) # Disabled until a preset is selected
-
         self.apply_button = QPushButton("Apply")
         self.apply_button.setToolTip("Apply the current photo style settings permanently to the image.")
         self.apply_button.clicked.connect(self.trigger_apply)
         self.apply_button.setEnabled(False) # Disabled until a preset is selected
 
         button_layout.addStretch(1) # Push buttons to the right
-        self.save_preset_button = QPushButton("Save Preset...")
-        self.save_preset_button.setToolTip("Save the current adjustments as a new photo style preset.")
-        self.save_preset_button.clicked.connect(self._save_current_preset)
-        # Enable save button only if an image is loaded in the main window
-        self.save_preset_button.setEnabled(False)
-
-        button_layout.addWidget(self.save_preset_button)
-        button_layout.addStretch(1) # Push buttons to the right
-        button_layout.addWidget(self.preview_button)
         button_layout.addWidget(self.apply_button)
         main_layout.addLayout(button_layout)
 
@@ -195,11 +189,8 @@ class PhotoPresetPanel(QWidget):
                 if button != sender: button.setChecked(False)
 
             self.current_preset_id = selected_preset_id
-            self.preview_button.setEnabled(True)
             self.apply_button.setEnabled(True)
-            # Save button should be enabled if an image is loaded, regardless of preset selection
-            self._update_save_button_state()
-            print(f"Photo Preset selected: {self.current_preset_id}")
+            logger.debug("Photo preset selected. preset_id=%s", self.current_preset_id)
             self.trigger_preview()
         else:
             # Deselected
@@ -209,13 +200,10 @@ class PhotoPresetPanel(QWidget):
     def _reset_selection(self):
         """Resets the UI state when no preset is selected."""
         self.current_preset_id = None
-        self.preview_button.setEnabled(False)
         self.apply_button.setEnabled(False)
-        # Save button state depends only on whether an image is loaded
-        self._update_save_button_state()
         # Uncheck all buttons
         for button in self.preset_buttons.values(): button.setChecked(False)
-        print("Photo Preset deselected.")
+        logger.debug("Photo preset deselected.")
         self.trigger_preview() # Trigger preview to show original
 
 
@@ -236,15 +224,15 @@ class PhotoPresetPanel(QWidget):
         # This panel only needs to emit the selected preset details.
 
         if self.current_preset_id:
-            # A preset is selected
-            print(f"Triggering photo preview for {self.current_preset_id} with intensity {self.intensity:.2f}")
-            # Emit signal with type 'photo'
+            logger.debug(
+                "Triggering photo preview. preset_id=%s intensity=%.2f",
+                self.current_preset_id,
+                self.intensity,
+            )
             # Emit signal with type 'photo' - image object is None here.
             self.preview_requested.emit(None, 'photo', self.current_preset_id, self.intensity)
         else:
-            # No preset is selected (deselected state)
-            print("Triggering photo preview for original image (no preset).")
-            # Emit signal with None for type and id.
+            logger.debug("Triggering photo preview for original image (no photo preset).")
             # Emit signal with None for type and id - image object is None here.
             self.preview_requested.emit(None, None, None, 0.0)
 
@@ -252,73 +240,18 @@ class PhotoPresetPanel(QWidget):
     def trigger_apply(self):
         """Emit signal to apply changes permanently"""
         if self.current_preset_id:
-            print(f"Triggering photo apply for {self.current_preset_id} with intensity {self.intensity:.2f}")
+            logger.debug(
+                "Triggering photo apply. preset_id=%s intensity=%.2f",
+                self.current_preset_id,
+                self.intensity,
+            )
             # The main window slot will handle getting the current image.
             # Emit signal with type 'photo' - image object is None here.
             self.apply_requested.emit(None, 'photo', self.current_preset_id, self.intensity)
             # Removed image fetching logic
         else:
-            print("Apply trigger: No photo preset selected.")
+            logger.debug("Apply trigger ignored: no photo preset selected.")
 
-    def _update_save_button_state(self):
-        """Enable/disable the Save Preset button based on main window state."""
-        can_save = False
-        if hasattr(self.main_window, 'get_current_image_for_processing'):
-            can_save = self.main_window.get_current_image_for_processing() is not None
-        self.save_preset_button.setEnabled(can_save)
-
-    def _save_current_preset(self):
-        """Save the current adjustments from the AdjustmentPanel as a new preset."""
-        if not hasattr(self.main_window, 'adjustment_panel'):
-            QMessageBox.warning(self, "Error", "Cannot access adjustment panel.")
-            return
-
-        current_adjustments = self.main_window.adjustment_panel.get_adjustments()
-        if not current_adjustments:
-            QMessageBox.warning(self, "Error", "Could not retrieve current adjustments.")
-            return
-
-        # 1. Get Preset Name
-        preset_name, ok = QInputDialog.getText(self, "Save Photo Preset", "Enter Preset Name:")
-        if not ok or not preset_name:
-            return # User cancelled or entered empty name
-
-        # 2. Generate ID (simple version: lowercase name, replace spaces)
-        preset_id = preset_name.lower().replace(" ", "_").replace("-", "_")
-        # Check for duplicates (basic check, could be more robust)
-        if self.preset_manager.get_preset(preset_id):
-             reply = QMessageBox.question(self, "Duplicate ID",
-                                          f"A preset with ID '{preset_id}' already exists. Overwrite?",
-                                          QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                                          QMessageBox.StandardButton.No)
-             if reply == QMessageBox.StandardButton.No:
-                 return
-
-        # 3. Get Optional Category
-        category, ok = QInputDialog.getText(self, "Save Photo Preset", "Enter Category (optional):", text="Custom")
-        if not ok:
-            category = "Custom" # Default if cancelled
-
-        # 4. Construct Preset Data
-        new_preset_data = {
-            "id": preset_id,
-            "name": preset_name,
-            "category": category if category else "Custom", # Ensure category is not empty
-            "description": "User-created preset", # Basic description
-            "parameters": current_adjustments # Save the full adjustment dict
-        }
-
-        # 5. Add to Manager and Save
-        try:
-            if hasattr(self.preset_manager, 'add_preset'):
-                self.preset_manager.add_preset(new_preset_data)
-                QMessageBox.information(self, "Preset Saved", f"Preset '{preset_name}' saved successfully.")
-                # 6. Refresh UI
-                self.load_presets_ui()
-            else:
-                 QMessageBox.critical(self, "Error", "Preset Manager does not support adding presets.")
-        except Exception as e:
-            QMessageBox.critical(self, "Error Saving Preset", f"Could not save preset:\n{e}")
 
     def get_current_selection(self):
         """Returns the currently selected preset ID and intensity."""
