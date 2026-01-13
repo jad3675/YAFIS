@@ -1,0 +1,28 @@
+{
+  "id": "teal-orange",
+  "name": "Teal & Orange",
+  "type": "photo",
+  "description": "Classic Hollywood color grading with complementary teal shadows and orange highlights",
+  "category": "Cinematic",
+  "thumbnail": "thumbnails/teal-orange.jpg",
+  "parameters": {
+    "brightness": 0,
+    "contrast": 15,
+    "saturation": 20,
+    "temperature": 10,
+    "tint": -5,
+    "highlights": 5,
+    "shadows": -10,
+    "vibrance": 15,
+    "toneCurve": {
+      "red": [[0, 5], [64, 55], [128, 135], [192, 210], [255, 255]],
+      "green": [[0, 5], [64, 60], [128, 128], [192, 195], [255, 250]],
+      "blue": [[0, 25], [64, 80], [128, 120], [192, 175], [255, 235]]
+    },
+    "colorBalance": {
+      "redBalance": 1.12,
+      "greenBalance": 0.95,
+      "blueBalance": 1.15
+    }
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "id": "cross-process-c41",
+  "name": "Cross-Processed C-41",
+  "description": "Negative film processed in E-6 chemicals - low contrast with weird colors",
+  "category": "Specialty",
+  "thumbnail": "thumbnails/crossprocessc41.jpg",
+  "parameters": {
+    "colorMatrix": [
+      [0.95, 0.03, 0.02],
+      [0.05, 0.92, 0.03],
+      [0.02, 0.05, 0.93]
+    ],
+    "toneCurve": {
+      "red": [[0, 25], [64, 75], [128, 125], [192, 178], [255, 230]],
+      "green": [[0, 20], [64, 70], [128, 130], [192, 185], [255, 235]],
+      "blue": [[0, 30], [64, 82], [128, 132], [192, 182], [255, 228]]
+    },
+    "grainParams": {
+      "intensity": 22,
+      "size": 0.9,
+      "roughness": 0.55
+    },
+    "colorBalance": {
+      "redShift": 5,
+      "greenShift": -8,
+      "blueShift": 10,
+      "redBalance": 1.05,
+      "greenBalance": 0.92,
+      "blueBalance": 1.10
+    },
+    "dynamicRange": {
+      "compression": 0.95,
+      "shadowPreservation": 0.75,
+      "highlightRolloff": 0.9
+    }
+  }
+}

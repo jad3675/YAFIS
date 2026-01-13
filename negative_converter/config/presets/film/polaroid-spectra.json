@@ -1,0 +1,44 @@
+{
+  "id": "polaroid-spectra",
+  "name": "Polaroid Spectra",
+  "description": "80s instant film with cooler tones and distinctive color palette",
+  "category": "Instant",
+  "thumbnail": "thumbnails/polaroidspectra.jpg",
+  "parameters": {
+    "colorMatrix": [
+      [1.05, -0.02, -0.03],
+      [-0.05, 1.10, -0.05],
+      [-0.03, -0.05, 1.08]
+    ],
+    "toneCurve": {
+      "red": [[0, 12], [64, 68], [128, 128], [192, 195], [255, 248]],
+      "green": [[0, 15], [64, 72], [128, 132], [192, 198], [255, 250]],
+      "blue": [[0, 18], [64, 75], [128, 135], [192, 200], [255, 250]]
+    },
+    "grainParams": {
+      "intensity": 12,
+      "size": 0.6,
+      "roughness": 0.45
+    },
+    "colorBalance": {
+      "redShift": -3,
+      "greenShift": 2,
+      "blueShift": 8,
+      "redBalance": 0.97,
+      "greenBalance": 1.02,
+      "blueBalance": 1.08
+    },
+    "dynamicRange": {
+      "compression": 0.85,
+      "shadowPreservation": 0.55,
+      "highlightRolloff": 0.75
+    },
+    "specialEffects": {
+      "border": {
+        "enabled": true,
+        "color": [250, 250, 252],
+        "width": 0.06
+      }
+    }
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "id": "tmax-100",
+  "name": "Kodak T-Max 100",
+  "description": "Ultra fine grain black and white with clean, smooth tones",
+  "category": "Black & White",
+  "thumbnail": "thumbnails/tmax100.jpg",
+  "parameters": {
+    "colorMatrix": [
+      [0.30, 0.59, 0.11],
+      [0.30, 0.59, 0.11],
+      [0.30, 0.59, 0.11]
+    ],
+    "toneCurve": {
+      "red": [[0, 3], [64, 60], [128, 128], [192, 200], [255, 252]],
+      "green": [[0, 3], [64, 60], [128, 128], [192, 200], [255, 252]],
+      "blue": [[0, 3], [64, 60], [128, 128], [192, 200], [255, 252]]
+    },
+    "grainParams": {
+      "intensity": 8,
+      "size": 0.35,
+      "roughness": 0.25
+    },
+    "colorBalance": {
+      "redShift": 0,
+      "greenShift": 0,
+      "blueShift": 0,
+      "redBalance": 1.0,
+      "greenBalance": 1.0,
+      "blueBalance": 1.0
+    },
+    "dynamicRange": {
+      "compression": 0.85,
+      "shadowPreservation": 0.55,
+      "highlightRolloff": 0.7
+    }
+  }
+}

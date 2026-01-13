@@ -1,0 +1,28 @@
+{
+  "id": "sepia",
+  "name": "Sepia",
+  "type": "photo",
+  "description": "Classic brown-toned monochrome for timeless vintage look",
+  "category": "Black & White",
+  "thumbnail": "thumbnails/sepia.jpg",
+  "parameters": {
+    "brightness": 5,
+    "contrast": 10,
+    "saturation": -100,
+    "temperature": 35,
+    "tint": 10,
+    "highlights": -5,
+    "shadows": 10,
+    "vibrance": 0,
+    "toneCurve": {
+      "red": [[0, 15], [64, 75], [128, 140], [192, 205], [255, 250]],
+      "green": [[0, 10], [64, 65], [128, 125], [192, 190], [255, 245]],
+      "blue": [[0, 5], [64, 50], [128, 100], [192, 160], [255, 220]]
+    },
+    "colorBalance": {
+      "redBalance": 1.15,
+      "greenBalance": 1.05,
+      "blueBalance": 0.80
+    }
+  }
+}

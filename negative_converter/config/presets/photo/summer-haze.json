@@ -1,0 +1,26 @@
+{
+  "id": "summer-haze",
+  "name": "Summer Haze",
+  "type": "photo",
+  "description": "Warm, slightly hazy golden hour feel with soft contrast",
+  "category": "Seasonal",
+  "thumbnail": "thumbnails/summer-haze.jpg",
+  "parameters": {
+    "brightness": 10,
+    "contrast": -10,
+    "saturation": 15,
+    "temperature": 25,
+    "tint": 5,
+    "highlights": -10,
+    "shadows": 20,
+    "vibrance": 20,
+    "toneCurve": {
+      "rgb": [[0, 15], [64, 75], [128, 135], [192, 200], [255, 250]]
+    },
+    "colorBalance": {
+      "redBalance": 1.10,
+      "greenBalance": 1.02,
+      "blueBalance": 0.88
+    }
+  }
+}

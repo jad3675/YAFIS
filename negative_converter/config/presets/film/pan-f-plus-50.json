@@ -1,0 +1,37 @@
+{
+  "id": "pan-f-plus-50",
+  "name": "Ilford Pan F Plus 50",
+  "description": "Extremely fine grain B&W with exceptional sharpness and detail",
+  "category": "Black & White",
+  "thumbnail": "thumbnails/panfplus50.jpg",
+  "parameters": {
+    "colorMatrix": [
+      [0.28, 0.60, 0.12],
+      [0.28, 0.60, 0.12],
+      [0.28, 0.60, 0.12]
+    ],
+    "toneCurve": {
+      "red": [[0, 2], [64, 58], [128, 125], [192, 198], [255, 253]],
+      "green": [[0, 2], [64, 58], [128, 125], [192, 198], [255, 253]],
+      "blue": [[0, 2], [64, 58], [128, 125], [192, 198], [255, 253]]
+    },
+    "grainParams": {
+      "intensity": 5,
+      "size": 0.25,
+      "roughness": 0.2
+    },
+    "colorBalance": {
+      "redShift": 0,
+      "greenShift": 0,
+      "blueShift": 0,
+      "redBalance": 1.0,
+      "greenBalance": 1.0,
+      "blueBalance": 1.0
+    },
+    "dynamicRange": {
+      "compression": 0.78,
+      "shadowPreservation": 0.45,
+      "highlightRolloff": 0.6
+    }
+  }
+}

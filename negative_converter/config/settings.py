@@ -1,8 +1,10 @@
 # Application settings
+import logging
 import numpy as np
 import json
 import os
-# Removed: from utils.logger import setup_logger
+
+logger = logging.getLogger(__name__)
 
 # --- Configuration File ---
 CONFIG_DIR = os.path.dirname(__file__)
@@ -16,9 +18,8 @@ def load_user_settings(path):
     try:
         with open(path, 'r') as f:
             return json.load(f)
-    except (json.JSONDecodeError, IOError) as e:
-        print(f"Warning: Could not load user settings from {path}. Error: {e}")
-        # Consider logging this properly
+    except (json.JSONDecodeError, IOError):
+        logger.exception("Could not load user settings from %s", path)
         return {}
 
 # --- Load User Settings ---
@@ -74,6 +75,7 @@ _UI_DEFAULTS_BASE = {
     "default_jpeg_quality": 95,
     "default_png_compression": 6, # Typical default
     "filmstrip_thumb_size": 120, # Example: User might override this
+    "apply_embedded_icc_profile": False,
 }
 
 # --- Logging (Base) ---
@@ -112,7 +114,7 @@ def reload_settings():
     # CONVERSION_DEFAULTS are intentionally NOT reloaded dynamically here
     # as the core converter likely uses them at initialization.
 
-    print("Reloading user settings...") # Log this
+    logger.info("Reloading user settings from %s", USER_SETTINGS_PATH)
     user_settings = load_user_settings(USER_SETTINGS_PATH)
 
     # Reload UI Defaults
@@ -124,7 +126,7 @@ def reload_settings():
 
     # Reload Logging Level (Note: This won't reconfigure the logger itself)
     LOGGING_LEVEL = user_settings.get("LOGGING_LEVEL", _BASE_LOGGING_LEVEL)
-    print(f"Settings reloaded. Current UI Defaults: {UI_DEFAULTS}, Logging Level: {LOGGING_LEVEL}") # Log
+    logger.info("Settings reloaded. Logging level=%s", LOGGING_LEVEL)
 
 def save_user_settings(settings_dict):
     """Saves the provided dictionary to the user settings JSON file."""
@@ -133,7 +135,7 @@ def save_user_settings(settings_dict):
     if "CONVERSION_DEFAULTS" in settings_dict:
         save_data["CONVERSION_DEFAULTS"] = {
             k: v for k, v in settings_dict["CONVERSION_DEFAULTS"].items()
-            if not isinstance(v, np.ndarray) # Exclude numpy arrays from JSON
+            if not isinstance(v, np.ndarray)  # Exclude numpy arrays from JSON
         }
     if "UI_DEFAULTS" in settings_dict:
         save_data["UI_DEFAULTS"] = settings_dict["UI_DEFAULTS"]
@@ -143,8 +145,8 @@ def save_user_settings(settings_dict):
     try:
         with open(USER_SETTINGS_PATH, 'w') as f:
             json.dump(save_data, f, indent=4)
-        print(f"User settings saved to {USER_SETTINGS_PATH}") # Log this
+        logger.info("User settings saved to %s", USER_SETTINGS_PATH)
         return True
-    except IOError as e:
-        print(f"Error: Could not save user settings to {USER_SETTINGS_PATH}. Error: {e}") # Log this
+    except IOError:
+        logger.exception("Could not save user settings to %s", USER_SETTINGS_PATH)
         return False

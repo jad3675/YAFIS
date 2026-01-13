@@ -1,0 +1,26 @@
+{
+  "id": "winter-cold",
+  "name": "Winter Cold",
+  "type": "photo",
+  "description": "Cool, crisp tones with blue shadows evoking cold winter atmosphere",
+  "category": "Seasonal",
+  "thumbnail": "thumbnails/winter-cold.jpg",
+  "parameters": {
+    "brightness": 5,
+    "contrast": 15,
+    "saturation": -15,
+    "temperature": -25,
+    "tint": -5,
+    "highlights": 10,
+    "shadows": 5,
+    "vibrance": -10,
+    "toneCurve": {
+      "rgb": [[0, 10], [64, 65], [128, 128], [192, 198], [255, 255]]
+    },
+    "colorBalance": {
+      "redBalance": 0.90,
+      "greenBalance": 0.98,
+      "blueBalance": 1.15
+    }
+  }
+}

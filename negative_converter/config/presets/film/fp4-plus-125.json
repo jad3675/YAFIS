@@ -1,0 +1,37 @@
+{
+  "id": "fp4-plus-125",
+  "name": "Ilford FP4 Plus 125",
+  "description": "Classic medium-contrast B&W with excellent tonal range",
+  "category": "Black & White",
+  "thumbnail": "thumbnails/fp4plus125.jpg",
+  "parameters": {
+    "colorMatrix": [
+      [0.33, 0.55, 0.12],
+      [0.33, 0.55, 0.12],
+      [0.33, 0.55, 0.12]
+    ],
+    "toneCurve": {
+      "red": [[0, 5], [64, 62], [128, 128], [192, 196], [255, 250]],
+      "green": [[0, 5], [64, 62], [128, 128], [192, 196], [255, 250]],
+      "blue": [[0, 5], [64, 62], [128, 128], [192, 196], [255, 250]]
+    },
+    "grainParams": {
+      "intensity": 15,
+      "size": 0.6,
+      "roughness": 0.45
+    },
+    "colorBalance": {
+      "redShift": 0,
+      "greenShift": 0,
+      "blueShift": 0,
+      "redBalance": 1.0,
+      "greenBalance": 1.0,
+      "blueBalance": 1.0
+    },
+    "dynamicRange": {
+      "compression": 0.82,
+      "shadowPreservation": 0.5,
+      "highlightRolloff": 0.65
+    }
+  }
+}

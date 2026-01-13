@@ -1,0 +1,49 @@
+{
+  "id": "polaroid-sx70",
+  "name": "Polaroid SX-70",
+  "description": "Vintage instant film with warm, dreamy colors and soft contrast",
+  "category": "Instant",
+  "thumbnail": "thumbnails/polaroidsx70.jpg",
+  "parameters": {
+    "colorMatrix": [
+      [1.10, -0.05, -0.05],
+      [-0.03, 1.05, -0.02],
+      [-0.08, -0.12, 1.20]
+    ],
+    "toneCurve": {
+      "red": [[0, 18], [64, 78], [128, 135], [192, 198], [255, 245]],
+      "green": [[0, 15], [64, 72], [128, 128], [192, 190], [255, 240]],
+      "blue": [[0, 12], [64, 62], [128, 118], [192, 180], [255, 232]]
+    },
+    "grainParams": {
+      "intensity": 15,
+      "size": 0.7,
+      "roughness": 0.5
+    },
+    "colorBalance": {
+      "redShift": 10,
+      "greenShift": 3,
+      "blueShift": -12,
+      "redBalance": 1.10,
+      "greenBalance": 1.03,
+      "blueBalance": 0.88
+    },
+    "dynamicRange": {
+      "compression": 0.88,
+      "shadowPreservation": 0.6,
+      "highlightRolloff": 0.78
+    },
+    "specialEffects": {
+      "border": {
+        "enabled": true,
+        "color": [252, 250, 245],
+        "width": 0.1
+      },
+      "vignette": {
+        "enabled": true,
+        "intensity": 0.2,
+        "radius": 0.85
+      }
+    }
+  }
+}

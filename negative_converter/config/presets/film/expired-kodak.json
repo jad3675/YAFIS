@@ -1,0 +1,44 @@
+{
+  "id": "expired-kodak",
+  "name": "Expired Kodak (Generic)",
+  "description": "Simulates aged film with color shifts, increased grain, and faded look",
+  "category": "Specialty",
+  "thumbnail": "thumbnails/expiredkodak.jpg",
+  "parameters": {
+    "colorMatrix": [
+      [1.08, -0.05, -0.03],
+      [-0.05, 1.02, -0.03],
+      [-0.08, -0.12, 1.20]
+    ],
+    "toneCurve": {
+      "red": [[0, 20], [64, 75], [128, 128], [192, 188], [255, 240]],
+      "green": [[0, 18], [64, 70], [128, 122], [192, 182], [255, 235]],
+      "blue": [[0, 25], [64, 78], [128, 125], [192, 180], [255, 230]]
+    },
+    "grainParams": {
+      "intensity": 45,
+      "size": 1.5,
+      "roughness": 0.8
+    },
+    "colorBalance": {
+      "redShift": 8,
+      "greenShift": -5,
+      "blueShift": 12,
+      "redBalance": 1.08,
+      "greenBalance": 0.95,
+      "blueBalance": 1.12
+    },
+    "dynamicRange": {
+      "compression": 0.92,
+      "shadowPreservation": 0.7,
+      "highlightRolloff": 0.85
+    },
+    "specialEffects": {
+      "vignette": {
+        "enabled": true,
+        "intensity": 0.2,
+        "radius": 0.8
+      }
+    }
+  }
+}

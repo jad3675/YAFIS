@@ -1,0 +1,26 @@
+{
+  "id": "clean-bright",
+  "name": "Clean & Bright",
+  "type": "photo",
+  "description": "Lifted shadows, bright airy feel perfect for commercial and lifestyle",
+  "category": "Modern",
+  "thumbnail": "thumbnails/clean-bright.jpg",
+  "parameters": {
+    "brightness": 15,
+    "contrast": 5,
+    "saturation": 10,
+    "temperature": 3,
+    "tint": 0,
+    "highlights": -15,
+    "shadows": 40,
+    "vibrance": 15,
+    "toneCurve": {
+      "rgb": [[0, 20], [64, 80], [128, 138], [192, 205], [255, 255]]
+    },
+    "colorBalance": {
+      "redBalance": 1.0,
+      "greenBalance": 1.0,
+      "blueBalance": 1.0
+    }
+  }
+}

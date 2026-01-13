@@ -24,9 +24,10 @@
         "hsv_saturation_boost": 1.15
     },
     "UI_DEFAULTS": {
-        "default_jpeg_quality": 85,
+        "default_jpeg_quality": 100,
         "default_png_compression": 6,
-        "filmstrip_thumb_size": 120
+        "filmstrip_thumb_size": 120,
+        "apply_embedded_icc_profile": true
     },
     "LOGGING_LEVEL": "INFO"
 }

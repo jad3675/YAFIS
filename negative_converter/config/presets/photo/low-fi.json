@@ -1,0 +1,35 @@
+{
+  "id": "low-fi",
+  "name": "Low-Fi",
+  "type": "photo",
+  "description": "Heavy grain, vignette, and color degradation for lo-fi aesthetic",
+  "category": "Vintage",
+  "thumbnail": "thumbnails/low-fi.jpg",
+  "parameters": {
+    "brightness": -5,
+    "contrast": -15,
+    "saturation": -25,
+    "temperature": 12,
+    "tint": 5,
+    "highlights": -15,
+    "shadows": 20,
+    "vibrance": -20,
+    "toneCurve": {
+      "rgb": [[0, 30], [64, 70], [128, 125], [192, 185], [255, 235]]
+    },
+    "colorBalance": {
+      "redBalance": 1.05,
+      "greenBalance": 0.98,
+      "blueBalance": 0.92
+    },
+    "grain": {
+      "intensity": 50,
+      "size": 1.5,
+      "roughness": 0.8
+    },
+    "vignette": {
+      "amount": 40,
+      "radius": 0.6
+    }
+  }
+}

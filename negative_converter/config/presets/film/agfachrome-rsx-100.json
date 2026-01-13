@@ -1,0 +1,37 @@
+{
+  "id": "agfachrome-rsx-100",
+  "name": "Agfachrome RSX II 100",
+  "description": "European slide film with unique color palette and warm midtones",
+  "category": "Slide Film",
+  "thumbnail": "thumbnails/agfachromersx100.jpg",
+  "parameters": {
+    "colorMatrix": [
+      [1.15, -0.08, -0.07],
+      [-0.06, 1.12, -0.06],
+      [-0.08, -0.10, 1.18]
+    ],
+    "toneCurve": {
+      "red": [[0, 5], [64, 68], [128, 135], [192, 205], [255, 252]],
+      "green": [[0, 3], [64, 62], [128, 128], [192, 198], [255, 250]],
+      "blue": [[0, 8], [64, 70], [128, 130], [192, 195], [255, 248]]
+    },
+    "grainParams": {
+      "intensity": 12,
+      "size": 0.55,
+      "roughness": 0.4
+    },
+    "colorBalance": {
+      "redShift": 5,
+      "greenShift": -2,
+      "blueShift": 3,
+      "redBalance": 1.05,
+      "greenBalance": 0.98,
+      "blueBalance": 1.03
+    },
+    "dynamicRange": {
+      "compression": 0.7,
+      "shadowPreservation": 0.32,
+      "highlightRolloff": 0.58
+    }
+  }
+}

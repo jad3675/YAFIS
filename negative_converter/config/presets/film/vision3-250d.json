@@ -1,0 +1,37 @@
+{
+  "id": "vision3-250d",
+  "name": "Kodak Vision3 250D",
+  "description": "Versatile cinema daylight stock with balanced colors and moderate grain",
+  "category": "Motion Picture",
+  "thumbnail": "thumbnails/vision3250d.jpg",
+  "parameters": {
+    "colorMatrix": [
+      [1.06, -0.03, -0.03],
+      [-0.02, 1.06, -0.04],
+      [-0.03, -0.04, 1.07]
+    ],
+    "toneCurve": {
+      "red": [[0, 6], [64, 66], [128, 128], [192, 194], [255, 251]],
+      "green": [[0, 6], [64, 66], [128, 128], [192, 194], [255, 251]],
+      "blue": [[0, 6], [64, 66], [128, 128], [192, 194], [255, 251]]
+    },
+    "grainParams": {
+      "intensity": 12,
+      "size": 0.6,
+      "roughness": 0.4
+    },
+    "colorBalance": {
+      "redShift": 3,
+      "greenShift": 1,
+      "blueShift": -3,
+      "redBalance": 1.03,
+      "greenBalance": 1.01,
+      "blueBalance": 0.97
+    },
+    "dynamicRange": {
+      "compression": 0.93,
+      "shadowPreservation": 0.72,
+      "highlightRolloff": 0.88
+    }
+  }
+}
