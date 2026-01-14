@@ -3,12 +3,13 @@ import sys
 import os
 from PyQt6.QtWidgets import QApplication
 
-# Ensure the package structure is recognized when running main.py directly
-# Add the parent directory (where negative_converter package resides) to the path
-script_dir = os.path.dirname(os.path.abspath(__file__))
-package_dir = os.path.dirname(script_dir) # Go up one level from negative_converter/
-if package_dir not in sys.path:
-    sys.path.insert(0, package_dir)
+# Ensure the package structure is recognized (dev runs + PyInstaller onefile).
+# In a frozen build, imports should resolve without sys.path hacks.
+if not getattr(sys, "frozen", False):
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    package_dir = os.path.dirname(script_dir)  # repo root (parent of negative_converter/)
+    if package_dir not in sys.path:
+        sys.path.insert(0, package_dir)
 
 # Import settings *before* other components that might use them or the logger
 from negative_converter.config import settings

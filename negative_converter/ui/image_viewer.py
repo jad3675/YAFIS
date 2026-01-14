@@ -28,6 +28,11 @@ class ImageViewer(QWidget):
         self._compare_wipe_percent = 100
         self._compare_wipe_enabled = False
 
+        # Cache scaled pixmaps so wipe slider doesn't rescale on every tick.
+        self._scaled_cache_key = None
+        self._scaled_after_cache = None
+        self._scaled_before_cache = None
+
         self.setup_ui()
 
     def setup_ui(self):
@@ -72,6 +77,7 @@ class ImageViewer(QWidget):
             self.image_label.clear()
             self.image_label.setText("No Image Loaded")
             self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._invalidate_scaled_cache()
             self._update_display() # Ensure label size is reset
             return
 
@@ -109,6 +115,7 @@ class ImageViewer(QWidget):
             # self._before_pixmap = None # REMOVED: Do not clear before state when setting after image
             self._display_mode = 'after' # Ensure mode is 'after' for new image
             self.display_mode_changed.emit(self._display_mode) # Emit signal for new image
+            self._invalidate_scaled_cache()
             self.fit_to_window() # Fit new image to window by default
 
         except Exception as e:
@@ -122,6 +129,66 @@ class ImageViewer(QWidget):
             self._update_display()
             self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
+
+    def _invalidate_scaled_cache(self):
+        self._scaled_cache_key = None
+        self._scaled_after_cache = None
+        self._scaled_before_cache = None
+
+    def _get_scaled_pixmaps(self, *, require_before: bool):
+        """Return (scaled_after, scaled_before|None) using a simple cache."""
+        after_pixmap = self._pixmap
+        before_pixmap = self._before_pixmap
+
+        if after_pixmap is None or after_pixmap.isNull():
+            return None, None
+
+        if require_before and (before_pixmap is None or before_pixmap.isNull()):
+            return None, None
+
+        # Scale target is based on after pixmap size + zoom (same logic as before).
+        original_size = after_pixmap.size()
+        scaled_size = QSize(
+            int(original_size.width() * self._zoom_factor),
+            int(original_size.height() * self._zoom_factor),
+        )
+        scaled_size.setWidth(max(1, scaled_size.width()))
+        scaled_size.setHeight(max(1, scaled_size.height()))
+
+        cache_key = (
+            int(after_pixmap.cacheKey()),
+            int(before_pixmap.cacheKey()) if before_pixmap is not None else 0,
+            float(self._zoom_factor),
+            int(scaled_size.width()),
+            int(scaled_size.height()),
+            bool(require_before),
+        )
+
+        if (
+            cache_key == self._scaled_cache_key
+            and self._scaled_after_cache is not None
+            and (not require_before or self._scaled_before_cache is not None)
+        ):
+            return self._scaled_after_cache, self._scaled_before_cache
+
+        scaled_after = after_pixmap.scaled(
+            scaled_size,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+
+        scaled_before = None
+        if require_before:
+            scaled_before = before_pixmap.scaled(
+                scaled_after.size(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+
+        self._scaled_cache_key = cache_key
+        self._scaled_after_cache = scaled_after
+        self._scaled_before_cache = scaled_before
+        return scaled_after, scaled_before
 
     def _update_display(self):
         """Updates the QLabel pixmap scaled by zoom.
@@ -150,49 +217,40 @@ class ImageViewer(QWidget):
                 self.image_label.resize(0, 0)
                 return
 
-            # Scale the original pixmap by the zoom factor
-            original_size = pixmap_to_display.size()
-            scaled_size = QSize(int(original_size.width() * self._zoom_factor),
-                                int(original_size.height() * self._zoom_factor))
+            # Scale once (cached) to avoid repeated rescale work.
+            # For single-image mode, we can reuse the same cache but only need "after" scaling.
+            if self._display_mode == 'before':
+                # Build a scaled "before" using the same sizing as "after" (consistent zoom feel).
+                # This still caches both, so repeated toggles don't rescale.
+                scaled_after, scaled_before = self._get_scaled_pixmaps(require_before=True)
+                scaled_pixmap = scaled_before
+            else:
+                scaled_after, _ = self._get_scaled_pixmaps(require_before=False)
+                scaled_pixmap = scaled_after
 
-            # Ensure minimum size of 1x1 pixel for the pixmap
-            scaled_size.setWidth(max(1, scaled_size.width()))
-            scaled_size.setHeight(max(1, scaled_size.height()))
-
-            scaled_pixmap = pixmap_to_display.scaled(
-                scaled_size,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
+            if scaled_pixmap is None or scaled_pixmap.isNull():
+                return
 
             self.image_label.setPixmap(scaled_pixmap)
             self.image_label.resize(scaled_pixmap.size())
             return
 
         # --- Wipe compare composite render ---
-        # Scale both pixmaps to the same target size (based on after pixmap size).
-        original_size = after_pixmap.size()
-        scaled_size = QSize(int(original_size.width() * self._zoom_factor),
-                            int(original_size.height() * self._zoom_factor))
-        scaled_size.setWidth(max(1, scaled_size.width()))
-        scaled_size.setHeight(max(1, scaled_size.height()))
-
-        scaled_after = after_pixmap.scaled(
-            scaled_size,
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        scaled_before = before_pixmap.scaled(
-            scaled_after.size(),
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
+        # Use cached scaled pixmaps to avoid expensive rescale on every slider tick.
+        scaled_after, scaled_before = self._get_scaled_pixmaps(require_before=True)
+        if scaled_after is None or scaled_before is None:
+            return
 
         composite = QPixmap(scaled_after.size())
         composite.fill(Qt.GlobalColor.black)
 
         p = QPainter(composite)
         try:
+            if not p.isActive():
+                # Avoid QPainter warnings / undefined rendering.
+                logger.warning("QPainter not active; skipping wipe composite render.")
+                return
+
             # Start with before everywhere
             p.drawPixmap(0, 0, scaled_before)
 
@@ -211,17 +269,38 @@ class ImageViewer(QWidget):
             p.setPen(Qt.GlobalColor.white)
             p.drawLine(divider_x, 0, divider_x, scaled_after.height())
         finally:
-            p.end()
+            if p.isActive():
+                p.end()
 
         self.image_label.setPixmap(composite)
         self.image_label.resize(composite.size())
 
     # --- Comparison Methods ---
 
+    def set_display_mode(self, mode: str):
+        """Explicitly set display mode to 'before' or 'after' and refresh."""
+        if mode not in ('before', 'after'):
+            return
+
+        # If wipe compare is enabled, ignore explicit modes (wipe controls view).
+        if self._compare_wipe_enabled:
+            return
+
+        if mode == 'before' and self._before_pixmap is None:
+            logger.debug("Cannot switch to 'before': no 'before' image stored.")
+            return
+
+        if self._display_mode != mode:
+            self._display_mode = mode
+            self.display_mode_changed.emit(self._display_mode)
+
+        self._update_display()
+
     def set_before_image(self, image_np):
         """Stores the current state as the 'before' image for comparison."""
         if image_np is None:
             self._before_pixmap = None
+            self._invalidate_scaled_cache()
             logger.debug("Cleared 'before' image.")
             return
 
@@ -232,6 +311,7 @@ class ImageViewer(QWidget):
             q_image = QImage(image_np.data, width, height, bytes_per_line, QImage.Format.Format_RGB888)
             if not q_image.isNull():
                 self._before_pixmap = QPixmap.fromImage(q_image)
+                self._invalidate_scaled_cache()
                 logger.debug("Stored 'before' image for comparison.")
             else:
                 self._before_pixmap = None
@@ -272,11 +352,17 @@ class ImageViewer(QWidget):
 
     def set_compare_wipe_enabled(self, enabled: bool):
         """Enable/disable wipe compare composite rendering."""
-        self._compare_wipe_enabled = bool(enabled)
+        enabled = bool(enabled)
+
+        if enabled == self._compare_wipe_enabled:
+            return
+
+        self._compare_wipe_enabled = enabled
         if self._compare_wipe_enabled:
             # Wipe view implies "after" is visible somewhere.
             self._display_mode = 'after'
             self.display_mode_changed.emit(self._display_mode)
+
         self._update_display()
 
     def set_compare_wipe_percent(self, percent: int):
@@ -293,6 +379,7 @@ class ImageViewer(QWidget):
     def zoom_in(self):
         """Zooms in on the image."""
         self._zoom_factor *= self._scale_increment
+        self._invalidate_scaled_cache()
         self._update_display()
 
     def zoom_out(self):
@@ -302,11 +389,13 @@ class ImageViewer(QWidget):
         self._zoom_factor /= self._scale_increment
         if self._zoom_factor < min_zoom:
             self._zoom_factor = min_zoom
+        self._invalidate_scaled_cache()
         self._update_display()
 
     def reset_zoom(self):
         """Resets the zoom to 100%."""
         self._zoom_factor = 1.0
+        self._invalidate_scaled_cache()
         self._update_display()
 
     def fit_to_window(self):
@@ -334,8 +423,9 @@ class ImageViewer(QWidget):
          # Prevent zooming smaller than a certain threshold if fitting results in tiny image
          min_fit_zoom = 0.05
          if self._zoom_factor < min_fit_zoom:
-             self._zoom_factor = min_fit_zoom
+              self._zoom_factor = min_fit_zoom
 
+         self._invalidate_scaled_cache()
          self._update_display()
 
     def resizeEvent(self, event):
@@ -452,6 +542,7 @@ class ImageViewer(QWidget):
 
             # 3. Update zoom and display (this resizes the label)
             self._zoom_factor = new_zoom_factor
+            self._invalidate_scaled_cache()
             self._update_display() # This is crucial BEFORE calculating scroll position
 
             # 4. Calculate scroll position to center the zoomed area

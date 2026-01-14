@@ -212,8 +212,16 @@ class MainWindow(QMainWindow):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Negative-to-Positive Converter")
+        self.setWindowTitle("YAFIS")
         self.setGeometry(100, 100, 1200, 800)
+
+        # App/window icon (best-effort; SVG requires QtSvg at runtime).
+        try:
+            icon_path = os.path.join(os.path.dirname(__file__), "icons", "yafis.svg")
+            if os.path.exists(icon_path):
+                self.setWindowIcon(QIcon(icon_path))
+        except Exception:
+            logger.exception("Failed to set window icon")
 
         # --- Status Info ---
         self._current_file_size = None
@@ -1426,13 +1434,27 @@ class MainWindow(QMainWindow):
         self._compare_slider_is_dragging = False
         # Apply final value immediately on release (so the user sees the exact position).
         if self._compare_slider_pending_value is not None:
-            self._apply_compare_slider_value(int(self._compare_slider_pending_value))
+            self._apply_compare_slider_value(int(self._compare_slider_pending_value), update_histogram=True)
             self._compare_slider_pending_value = None
+        else:
+            # If no pending value, still ensure histogram reflects current endpoint if applicable.
+            try:
+                self._apply_compare_slider_value(int(self.compare_slider.value()), update_histogram=True)
+            except Exception:
+                # Never let histogram update failures lock the UI.
+                logger.exception("Failed to update histogram on compare slider release")
 
     def _apply_pending_compare_slider_value(self):
         if self._compare_slider_pending_value is None:
             return
-        self._apply_compare_slider_value(int(self._compare_slider_pending_value))
+
+        # While dragging, skip histogram work (it can be expensive for large images).
+        update_hist = not self._compare_slider_is_dragging
+        self._apply_compare_slider_value(
+            int(self._compare_slider_pending_value),
+            update_histogram=update_hist,
+        )
+
         # Keep pending value while dragging so release can apply instantly; clear only if not dragging.
         if not self._compare_slider_is_dragging:
             self._compare_slider_pending_value = None
@@ -1444,28 +1466,44 @@ class MainWindow(QMainWindow):
 
         self._compare_slider_pending_value = int(value)
 
-        # While dragging: debounce updates (every ~50ms).
-        # When not dragging (e.g. keyboard step): apply immediately.
+        # While dragging: debounce viewer updates and skip histogram work.
         if self._compare_slider_is_dragging:
             self._compare_slider_debounce_timer.start(self._compare_slider_debounce_ms)
             return
 
-        self._apply_compare_slider_value(int(value))
+        # Not dragging (keyboard/step): apply immediately including histogram endpoints.
+        self._apply_compare_slider_value(int(value), update_histogram=True)
 
-    def _apply_compare_slider_value(self, value: int):
-        """Apply a compare slider value (0..100) to the viewer."""
-        # Enable wipe compare when slider is between endpoints; disable at endpoints.
-        enable_wipe = (0 < int(value) < 100)
-        self.image_viewer.set_compare_wipe_enabled(enable_wipe)
-        self.image_viewer.set_compare_wipe_percent(int(value))
+    def _apply_compare_slider_value(self, value: int, *, update_histogram: bool):
+        """Apply a compare slider value (0..100) to the viewer.
+
+        update_histogram:
+          - False while dragging (avoid extra work / UI stalls)
+          - True on release (update at endpoints only)
+        """
+        v = int(value)
+
+        # Endpoints: show full before/after explicitly (wipe disabled).
+        if v <= 0:
+            self.image_viewer.set_compare_wipe_enabled(False)
+            self.image_viewer.set_display_mode('before')
+        elif v >= 100:
+            self.image_viewer.set_compare_wipe_enabled(False)
+            self.image_viewer.set_display_mode('after')
+        else:
+            # Mid-range: enable wipe compare.
+            self.image_viewer.set_compare_wipe_enabled(True)
+            self.image_viewer.set_compare_wipe_percent(v)
+
+        if not update_histogram:
+            return
 
         # Histogram: update only at endpoints.
-        if int(value) == 0:
+        if v <= 0:
             self.histogram_widget.update_histogram(self.initial_converted_image)
-        elif int(value) == 100:
+        elif v >= 100:
             # IMPORTANT: don't recompute full adjustments on the UI thread here.
-            # Just show the histogram of the current displayed "after" image.
-            # (Keeping UI responsive is more important than exact histogram at this moment.)
+            # Just show the histogram of the current displayed “after” image.
             after_img = getattr(self.image_viewer, "_current_image", None)
             if after_img is not None:
                 self.histogram_widget.update_histogram(after_img)
@@ -1525,137 +1563,6 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"White balance adjusted based on sampled color {rgb_tuple}.", 3000)
         else: # Sampling cancelled
             self.statusBar().showMessage("White Balance picker cancelled.", 2000)
-
-
-    @pyqtSlot(str) # Slot for AWB request from AdjustmentPanel
-    def handle_awb_request(self, method):
-        """Handles the Auto White Balance request."""
-        if self.base_image is None: return
-        logger.info("AWB requested with method: %s", method)
-        self.statusBar().showMessage(f"Applying Auto White Balance ({method})...")
-        QApplication.processEvents()
-        try:
-            # Apply AWB directly for now (could be moved to worker if slow)
-            # The basic_adjuster needs the current image state if methods depend on it,
-            # but typically AWB works on the base image or initial conversion.
-            # Let's assume it works on self.base_image for simplicity here.
-            # The function should return the *change* in WB gains or the new gains.
-            # We need to update the sliders in AdjustmentPanel.
-            # This requires modification to ImageAdjustments.auto_white_balance
-            # to return the calculated gains.
-            # --- Placeholder ---
-            # wb_gains = self.basic_adjuster.auto_white_balance(self.base_image, method=method)
-            # if wb_gains:
-            #     self.adjustment_panel.set_wb_gains(wb_gains) # Need this method in AdjustmentPanel
-            #     self.statusBar().showMessage("Auto White Balance applied.", 2000)
-            # else:
-            #     self.statusBar().showMessage("Auto White Balance failed.", 3000)
-            # --- End Placeholder ---
-            QMessageBox.information(self, "Not Implemented", f"Auto White Balance ({method}) is not fully implemented yet.")
-            self.statusBar().showMessage("AWB not fully implemented.", 3000) # Placeholder message
-        except Exception as e:
-            QMessageBox.critical(self, "AWB Error", f"Error during Auto White Balance: {e}")
-            self.statusBar().showMessage(f"AWB Error: {e}", 5000)
-
-
-    @pyqtSlot(str, float) # Slot for Auto Level request from AdjustmentPanel
-    def handle_auto_level_request(self, mode, midrange):
-        """Handles the Auto Levels request."""
-        if self.base_image is None: return
-        logger.info("Auto Levels requested. Mode=%s, Midrange=%s", mode, midrange)
-        self.statusBar().showMessage("Applying Auto Levels...")
-        QApplication.processEvents()
-        try:
-            # Similar to AWB, this needs coordination. Auto Levels modifies the image
-            # contrast/brightness based on histogram. It might modify the base_image
-            # destructively or return new black/white points to be applied via sliders.
-            # Applying destructively is simpler for now.
-            # --- Placeholder ---
-            # self._store_previous_state() # Store state before destructive op
-            # modified_image = self.basic_adjuster.auto_levels(self.base_image, mode=mode, midrange=midrange)
-            # if modified_image is not None:
-            #     self.base_image = modified_image
-            #     self.adjustment_panel.reset_adjustments() # Reset sliders as base changed
-            #     self.image_viewer.set_image(self.base_image)
-            #     self.histogram_widget.update_histogram(self.base_image)
-            #     self.statusBar().showMessage("Auto Levels applied.", 2000)
-            # else:
-            #     self.statusBar().showMessage("Auto Levels failed.", 3000)
-            #     self.previous_base_image = None # Clear undo state if failed
-            #     self.update_ui_state()
-            # --- End Placeholder ---
-            QMessageBox.information(self, "Not Implemented", "Auto Levels is not fully implemented yet.")
-            self.statusBar().showMessage("Auto Levels not fully implemented.", 3000)
-        except Exception as e:
-            QMessageBox.critical(self, "Auto Levels Error", f"Error during Auto Levels: {e}")
-            self.statusBar().showMessage(f"Auto Levels Error: {e}", 5000)
-            self.previous_base_image = None # Clear undo state on error
-            self.update_ui_state()
-
-
-    @pyqtSlot(str) # Slot for Auto Color request from AdjustmentPanel
-    def handle_auto_color_request(self, method):
-        """Handles the Auto Color request."""
-        if self.base_image is None: return
-        logger.info("Auto Color requested with method: %s", method)
-        self.statusBar().showMessage(f"Applying Auto Color ({method})...")
-        QApplication.processEvents()
-        try:
-            # Auto Color typically adjusts saturation and color balance.
-            # Needs coordination like AWB/Levels.
-            # --- Placeholder ---
-            # self._store_previous_state()
-            # modified_image = self.basic_adjuster.auto_color(self.base_image, method=method)
-            # if modified_image is not None:
-            #     self.base_image = modified_image
-            #     self.adjustment_panel.reset_adjustments()
-            #     self.image_viewer.set_image(self.base_image)
-            #     self.histogram_widget.update_histogram(self.base_image)
-            #     self.statusBar().showMessage("Auto Color applied.", 2000)
-            # else:
-            #     self.statusBar().showMessage("Auto Color failed.", 3000)
-            #     self.previous_base_image = None
-            #     self.update_ui_state()
-            # --- End Placeholder ---
-            QMessageBox.information(self, "Not Implemented", f"Auto Color ({method}) is not fully implemented yet.")
-            self.statusBar().showMessage("Auto Color not fully implemented.", 3000)
-        except Exception as e:
-            QMessageBox.critical(self, "Auto Color Error", f"Error during Auto Color: {e}")
-            self.statusBar().showMessage(f"Auto Color Error: {e}", 5000)
-            self.previous_base_image = None
-            self.update_ui_state()
-
-
-    @pyqtSlot() # Slot for Auto Tone request from AdjustmentPanel
-    def handle_auto_tone_request(self):
-        """Handles the Auto Tone request."""
-        if self.base_image is None: return
-        logger.info("Auto Tone requested.")
-        self.statusBar().showMessage("Applying Auto Tone...")
-        QApplication.processEvents()
-        try:
-            # Auto Tone often combines aspects of Levels and Contrast.
-            # --- Placeholder ---
-            # self._store_previous_state()
-            # modified_image = self.basic_adjuster.auto_tone(self.base_image)
-            # if modified_image is not None:
-            #     self.base_image = modified_image
-            #     self.adjustment_panel.reset_adjustments()
-            #     self.image_viewer.set_image(self.base_image)
-            #     self.histogram_widget.update_histogram(self.base_image)
-            #     self.statusBar().showMessage("Auto Tone applied.", 2000)
-            # else:
-            #     self.statusBar().showMessage("Auto Tone failed.", 3000)
-            #     self.previous_base_image = None
-            #     self.update_ui_state()
-            # --- End Placeholder ---
-            QMessageBox.information(self, "Not Implemented", "Auto Tone is not fully implemented yet.")
-            self.statusBar().showMessage("Auto Tone not fully implemented.", 3000)
-        except Exception as e:
-            QMessageBox.critical(self, "Auto Tone Error", f"Error during Auto Tone: {e}")
-            self.statusBar().showMessage(f"Auto Tone Error: {e}", 5000)
-            self.previous_base_image = None
-            self.update_ui_state()
 
 
     # --- Preset Handling ---
@@ -1854,10 +1761,17 @@ def main():
     # Create the Qt Application
     app = QApplication(sys.argv)
 
-    # Optional: Set application details
-    app.setApplicationName("Negative Converter")
-    app.setOrganizationName("ExampleOrg") # Replace if desired
-    # app.setWindowIcon(QIcon("path/to/icon.png")) # Set application icon
+    # Application details
+    app.setApplicationName("YAFIS")
+    app.setOrganizationName("YAFIS")  # used for QSettings; keep stable
+
+    # App icon (best-effort; SVG requires QtSvg at runtime).
+    try:
+        icon_path = os.path.join(os.path.dirname(__file__), "ui", "icons", "yafis.svg")
+        if os.path.exists(icon_path):
+            app.setWindowIcon(QIcon(icon_path))
+    except Exception:
+        logger.exception("Failed to set application icon")
 
     # Create and show the main window
     main_window = MainWindow()
