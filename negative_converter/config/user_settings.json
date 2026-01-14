@@ -29,5 +29,5 @@
         "filmstrip_thumb_size": 120,
         "apply_embedded_icc_profile": true
     },
-    "LOGGING_LEVEL": "INFO"
+    "LOGGING_LEVEL": "DEBUG"
 }
