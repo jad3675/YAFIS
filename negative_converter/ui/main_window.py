@@ -1154,9 +1154,24 @@ class MainWindow(QMainWindow, FileHandlingMixin, BatchProcessingMixin, ViewManag
             return # Don't allow change if no image or currently converting
 
         current_type = self._current_negative_type if self._current_negative_type else "Auto"
-        # Define possible types (including Auto/None which triggers default detection)
-        # Should match the types the backend converter understands for override
-        possible_types = ["Auto", "C41", "B&W", "E6", "Other/Clear"] # Add more as supported
+        
+        # Define possible types - these map to backend classification strings
+        # Format: (display_name, backend_value)
+        type_mapping = {
+            "Auto": None,
+            "C-41 (Color Negative)": "Likely C-41",
+            "ECN-2 (Motion Picture)": "Likely ECN-2",
+            "E-6 (Slide/Reversal)": "Likely E-6",
+            "B&W (Black & White)": "Likely B&W",
+            "Clear/Near Clear": "Clear/Near Clear",
+            "Unknown/Other": "Unknown/Other"
+        }
+        
+        # Reverse mapping to find current display name
+        reverse_mapping = {v: k for k, v in type_mapping.items()}
+        current_display = reverse_mapping.get(current_type, "Auto")
+        
+        possible_types = list(type_mapping.keys())
 
         # Ask user to select a new type
         new_type, ok = QInputDialog.getItem(
@@ -1164,14 +1179,14 @@ class MainWindow(QMainWindow, FileHandlingMixin, BatchProcessingMixin, ViewManag
             "Override Negative Type",
             "Select negative base type (Auto uses detection):",
             possible_types,
-            possible_types.index(current_type) if current_type in possible_types else 0,
+            possible_types.index(current_display) if current_display in possible_types else 0,
             editable=False
         )
 
-        if ok and new_type != current_type:
+        if ok and new_type != current_display:
             logger.info("User selected new negative type override: %s", new_type)
             # Map UI selection to backend override value (None for Auto)
-            override_value = new_type if new_type != "Auto" else None
+            override_value = type_mapping.get(new_type)
             # Trigger re-conversion with the selected override
             self._rerun_conversion_with_override(override_value)
 

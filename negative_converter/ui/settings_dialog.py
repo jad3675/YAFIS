@@ -84,6 +84,52 @@ class SettingsDialog(QDialog):
         self.mask_c41_val_max.setRange(0, 255)
         layout.addRow("C41 Mask Value Max:", self.mask_c41_val_max)
 
+        # --- ECN-2 (Motion Picture) Detection ---
+        layout.addRow(QLabel("<b>ECN-2 Detection</b>"))
+        self.mask_ecn2_hue_min = QSpinBox()
+        self.mask_ecn2_hue_min.setRange(0, 360)
+        layout.addRow("ECN-2 Hue Min:", self.mask_ecn2_hue_min)
+
+        self.mask_ecn2_hue_max = QSpinBox()
+        self.mask_ecn2_hue_max.setRange(0, 360)
+        layout.addRow("ECN-2 Hue Max:", self.mask_ecn2_hue_max)
+
+        self.mask_ecn2_sat_min = QSpinBox()
+        self.mask_ecn2_sat_min.setRange(0, 255)
+        layout.addRow("ECN-2 Saturation Min:", self.mask_ecn2_sat_min)
+
+        self.mask_ecn2_val_min = QSpinBox()
+        self.mask_ecn2_val_min.setRange(0, 255)
+        layout.addRow("ECN-2 Value Min:", self.mask_ecn2_val_min)
+
+        self.mask_ecn2_val_max = QSpinBox()
+        self.mask_ecn2_val_max.setRange(0, 255)
+        layout.addRow("ECN-2 Value Max:", self.mask_ecn2_val_max)
+
+        # --- E-6 (Slide Film) Detection ---
+        layout.addRow(QLabel("<b>E-6 Detection</b>"))
+        self.mask_e6_sat_max = QSpinBox()
+        self.mask_e6_sat_max.setRange(0, 255)
+        layout.addRow("E-6 Saturation Max:", self.mask_e6_sat_max)
+
+        self.mask_e6_val_min = QSpinBox()
+        self.mask_e6_val_min.setRange(0, 255)
+        layout.addRow("E-6 Value Min:", self.mask_e6_val_min)
+
+        # --- B&W Detection ---
+        layout.addRow(QLabel("<b>B&W Detection</b>"))
+        self.mask_bw_sat_max = QSpinBox()
+        self.mask_bw_sat_max.setRange(0, 255)
+        layout.addRow("B&W Saturation Max:", self.mask_bw_sat_max)
+
+        self.mask_bw_val_min = QSpinBox()
+        self.mask_bw_val_min.setRange(0, 255)
+        layout.addRow("B&W Value Min:", self.mask_bw_val_min)
+
+        self.mask_bw_val_max = QSpinBox()
+        self.mask_bw_val_max.setRange(0, 255)
+        layout.addRow("B&W Value Max:", self.mask_bw_val_max)
+
         # --- White Balance ---
         layout.addRow(QLabel("<b>White Balance</b>"))
         self.wb_target_gray = QDoubleSpinBox()
@@ -272,6 +318,22 @@ class SettingsDialog(QDialog):
         self.mask_c41_val_min.setValue(self._get_setting("CONVERSION", "mask_c41_val_min", 60))
         self.mask_c41_val_max.setValue(self._get_setting("CONVERSION", "mask_c41_val_max", 210))
 
+        # ECN-2 settings
+        self.mask_ecn2_hue_min.setValue(self._get_setting("CONVERSION", "mask_ecn2_hue_min", 5))
+        self.mask_ecn2_hue_max.setValue(self._get_setting("CONVERSION", "mask_ecn2_hue_max", 25))
+        self.mask_ecn2_sat_min.setValue(self._get_setting("CONVERSION", "mask_ecn2_sat_min", 50))
+        self.mask_ecn2_val_min.setValue(self._get_setting("CONVERSION", "mask_ecn2_val_min", 30))
+        self.mask_ecn2_val_max.setValue(self._get_setting("CONVERSION", "mask_ecn2_val_max", 80))
+
+        # E-6 settings
+        self.mask_e6_sat_max.setValue(self._get_setting("CONVERSION", "mask_e6_sat_max", 25))
+        self.mask_e6_val_min.setValue(self._get_setting("CONVERSION", "mask_e6_val_min", 200))
+
+        # B&W settings
+        self.mask_bw_sat_max.setValue(self._get_setting("CONVERSION", "mask_bw_sat_max", 20))
+        self.mask_bw_val_min.setValue(self._get_setting("CONVERSION", "mask_bw_val_min", 100))
+        self.mask_bw_val_max.setValue(self._get_setting("CONVERSION", "mask_bw_val_max", 255))
+
         self.wb_target_gray.setValue(self._get_setting("CONVERSION", "wb_target_gray", 128.0))
         self.wb_clamp_min.setValue(self._get_setting("CONVERSION", "wb_clamp_min", 0.8))
         self.wb_clamp_max.setValue(self._get_setting("CONVERSION", "wb_clamp_max", 1.3))
@@ -329,6 +391,19 @@ class SettingsDialog(QDialog):
                     "mask_c41_sat_min": self.mask_c41_sat_min.value(),
                     "mask_c41_val_min": self.mask_c41_val_min.value(),
                     "mask_c41_val_max": self.mask_c41_val_max.value(),
+                    # ECN-2 Detection
+                    "mask_ecn2_hue_min": self.mask_ecn2_hue_min.value(),
+                    "mask_ecn2_hue_max": self.mask_ecn2_hue_max.value(),
+                    "mask_ecn2_sat_min": self.mask_ecn2_sat_min.value(),
+                    "mask_ecn2_val_min": self.mask_ecn2_val_min.value(),
+                    "mask_ecn2_val_max": self.mask_ecn2_val_max.value(),
+                    # E-6 Detection
+                    "mask_e6_sat_max": self.mask_e6_sat_max.value(),
+                    "mask_e6_val_min": self.mask_e6_val_min.value(),
+                    # B&W Detection
+                    "mask_bw_sat_max": self.mask_bw_sat_max.value(),
+                    "mask_bw_val_min": self.mask_bw_val_min.value(),
+                    "mask_bw_val_max": self.mask_bw_val_max.value(),
                     # White Balance
                     "wb_target_gray": self.wb_target_gray.value(),
                     "wb_clamp_min": self.wb_clamp_min.value(),
