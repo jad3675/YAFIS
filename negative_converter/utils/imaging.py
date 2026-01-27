@@ -3,7 +3,7 @@ import cv2
 
 # Use centralized GPU detection and logger
 # Imports from within the same package can be relative
-from .gpu import GPU_ENABLED, xp, cp_module
+from .gpu import GPU_ENABLED, xp, cp_module, is_cupy_backend
 from .logger import get_logger
 # No changes needed here, imports are already correct relative to utils
 
@@ -32,9 +32,13 @@ def apply_curve(image_channel, curve_points):
         logger.warning("Input channel is empty.")
         return image_channel
 
-    # Determine backend (xp) and if input is CuPy array
-    # xp is imported from utils.gpu, check if input matches the GPU backend
-    is_cupy_input = GPU_ENABLED and xp.get_array_module(image_channel) == xp
+    # Determine if input is CuPy array (only possible if CuPy backend is active)
+    is_cupy_input = False
+    if is_cupy_backend() and cp is not None:
+        try:
+            is_cupy_input = cp.get_array_module(image_channel) == cp
+        except Exception:
+            is_cupy_input = False
 
     # Validate and prepare curve points (using NumPy for simplicity as points array is small)
     if curve_points is None:
@@ -56,42 +60,37 @@ def apply_curve(image_channel, curve_points):
          # Use the y-value of the last point for the end
         points_np = np.vstack((points_np, [255, points_np[-1, 1]]))
 
-    # Generate base x-values for LUT (0-255) using the determined backend
-    lut_x = xp.arange(256, dtype=xp.float32)
+    # Use the appropriate array module based on input
+    arr_module = cp if is_cupy_input else np
 
-    # Generate float LUT y-values using interpolation on the determined backend
-    # Transfer curve points to GPU if needed for interpolation
-    xp_curve = xp.asarray(points_np[:, 0], dtype=xp.float32)
-    fp_curve = xp.asarray(points_np[:, 1], dtype=xp.float32)
-    lut_y_float = xp.interp(lut_x, xp_curve, fp_curve)
+    # Generate base x-values for LUT (0-255)
+    lut_x = arr_module.arange(256, dtype=arr_module.float32)
+
+    # Generate float LUT y-values using interpolation
+    xp_curve = arr_module.asarray(points_np[:, 0], dtype=arr_module.float32)
+    fp_curve = arr_module.asarray(points_np[:, 1], dtype=arr_module.float32)
+    lut_y_float = arr_module.interp(lut_x, xp_curve, fp_curve)
     # Clip LUT values to ensure they are within the valid 0-255 range
-    lut_y_float = xp.clip(lut_y_float, 0, 255)
+    lut_y_float = arr_module.clip(lut_y_float, 0, 255)
 
     # Apply based on input dtype
     if image_channel.dtype == np.uint8:
         if is_cupy_input:
             # cv2.LUT requires NumPy array. Convert CuPy uint8 input to NumPy.
             logger.warning("uint8 input was CuPy array, converting to NumPy for cv2.LUT.")
-            image_channel_np = xp.asnumpy(image_channel) # Use xp.asnumpy
-            # Convert float LUT (which might be CuPy array) to NumPy uint8
-            # lut_y_float is already on GPU (xp is cupy), convert to NumPy uint8
-            lut_uint8 = xp.asnumpy(lut_y_float).astype(np.uint8)
+            image_channel_np = cp.asnumpy(image_channel)
+            # Convert float LUT (which is CuPy array) to NumPy uint8
+            lut_uint8 = cp.asnumpy(lut_y_float).astype(np.uint8)
             result = cv2.LUT(image_channel_np, lut_uint8)
-            # Convert result back to CuPy? Or decide utility always returns NumPy for uint8?
-            # For now, let's return NumPy for uint8 input, consistent with cv2.LUT output.
             return result
         else:
             # Input is NumPy uint8
-            lut_uint8 = lut_y_float.astype(np.uint8) # lut_y_float is already NumPy
+            lut_uint8 = lut_y_float.astype(np.uint8)
             return cv2.LUT(image_channel, lut_uint8)
 
     elif image_channel.dtype == np.float32:
         # Apply LUT using interpolation for float32 input (works for NumPy/CuPy)
-        # We interpolate the input channel's values using the LUT definition
-        # lut_x defines the "indices" (0-255), lut_y_float defines the "values" at those indices
-        result_float = xp.interp(image_channel, lut_x, lut_y_float)
-        # Clipping float result might be desired depending on context, but leave it unclamped for now
-        # return xp.clip(result_float, 0, 255)
+        result_float = arr_module.interp(image_channel, lut_x, lut_y_float)
         return result_float
 
     else:
