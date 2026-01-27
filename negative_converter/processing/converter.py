@@ -227,7 +227,9 @@ class NegativeConverter:
         # Try to load from profiles directory
         profile_map = {
             "C41": "c41_generic.json",
-            "BW": "bw_generic.json"
+            "BW": "bw_generic.json",
+            "E6": "e6_generic.json",
+            "ECN2": "ecn2_generic.json"
         }
         
         profile_filename = profile_map.get(profile_id, f"{profile_id.lower()}.json")
@@ -263,7 +265,8 @@ class NegativeConverter:
             image: The input negative image (NumPy array).
             progress_callback (callable, optional): A function to call with (current_step, total_steps). Defaults to None.
             override_mask_classification (str, optional): If provided, skips auto-detection and uses this classification.
-                                                        Valid values: "Likely C-41", "Clear/Near Clear", "Unknown/Other". Defaults to None.
+                                                        Valid values: "Likely C-41", "Likely ECN-2", "Likely E-6", 
+                                                        "Likely B&W", "Clear/Near Clear", "Unknown/Other". Defaults to None.
 
         Returns:
             tuple: A tuple containing:
@@ -304,19 +307,53 @@ class NegativeConverter:
             hue, sat, val = mask_hsv[0], mask_hsv[1], mask_hsv[2]
             logger.debug(f"Mask HSV: H={hue}, S={sat}, V={val}")
 
+            # Get all mask detection thresholds
             CLEAR_SAT_MAX = self.params['mask_clear_sat_max']
+            
+            # C-41 thresholds
             C41_HUE_MIN = self.params['mask_c41_hue_min']
             C41_HUE_MAX = self.params['mask_c41_hue_max']
             C41_SAT_MIN = self.params['mask_c41_sat_min']
             C41_VAL_MIN = self.params['mask_c41_val_min']
             C41_VAL_MAX = self.params['mask_c41_val_max']
+            
+            # ECN-2 thresholds (motion picture film - darker orange/brown)
+            ECN2_HUE_MIN = self.params.get('mask_ecn2_hue_min', 5)
+            ECN2_HUE_MAX = self.params.get('mask_ecn2_hue_max', 25)
+            ECN2_SAT_MIN = self.params.get('mask_ecn2_sat_min', 50)
+            ECN2_VAL_MIN = self.params.get('mask_ecn2_val_min', 30)
+            ECN2_VAL_MAX = self.params.get('mask_ecn2_val_max', 80)
+            
+            # E-6 thresholds (slide film - clear, bright base)
+            E6_SAT_MAX = self.params.get('mask_e6_sat_max', 25)
+            E6_VAL_MIN = self.params.get('mask_e6_val_min', 200)
+            
+            # B&W thresholds
+            BW_SAT_MAX = self.params.get('mask_bw_sat_max', 20)
+            BW_VAL_MIN = self.params.get('mask_bw_val_min', 100)
+            BW_VAL_MAX = self.params.get('mask_bw_val_max', 255)
 
-            if sat < CLEAR_SAT_MAX:
-                mask_classification = "Clear/Near Clear"
+            # Classification logic - order matters (most specific first)
+            # ECN-2: darker orange/brown mask (motion picture negative)
+            if (ECN2_HUE_MIN <= hue <= ECN2_HUE_MAX and
+                sat >= ECN2_SAT_MIN and
+                ECN2_VAL_MIN <= val <= ECN2_VAL_MAX):
+                mask_classification = "Likely ECN-2"
+            # C-41: standard orange mask (color negative)
             elif (C41_HUE_MIN <= hue <= C41_HUE_MAX and
                   sat >= C41_SAT_MIN and
                   C41_VAL_MIN <= val <= C41_VAL_MAX):
                 mask_classification = "Likely C-41"
+            # E-6: clear bright base (slide/reversal film)
+            elif sat <= E6_SAT_MAX and val >= E6_VAL_MIN:
+                mask_classification = "Likely E-6"
+            # B&W: low saturation, moderate to high value
+            elif sat <= BW_SAT_MAX and BW_VAL_MIN <= val <= BW_VAL_MAX:
+                mask_classification = "Likely B&W"
+            # Clear/Near Clear: generic low saturation
+            elif sat < CLEAR_SAT_MAX:
+                mask_classification = "Clear/Near Clear"
+            
             logger.debug(f"Auto-Detected Mask Classification: {mask_classification}")
 
         # --- Calculate WB scale factors based on classification ---
@@ -330,6 +367,24 @@ class NegativeConverter:
                                        self.params['wb_clamp_min'],
                                        self.params['wb_clamp_max'])
             logger.debug(f"C-41 WB Scale Factors: {scale_factors_np}")
+        elif mask_classification == "Likely ECN-2":
+            # ECN-2 has a darker mask - use similar approach but with adjusted target
+            inverted_mask_color_np = 255.0 - mask_color_np
+            inverted_mask_color_np = np.maximum(inverted_mask_color_np, 1e-6)
+            # ECN-2 often needs slightly different target due to darker base
+            target_gray = self.params.get('wb_target_gray_ecn2', 140.0)
+            scale_factors_np = target_gray / inverted_mask_color_np
+            # Allow wider range for ECN-2 due to darker mask
+            scale_factors_np = np.clip(scale_factors_np, 0.7, 1.5)
+            logger.debug(f"ECN-2 WB Scale Factors: {scale_factors_np}")
+        elif mask_classification == "Likely E-6":
+            # E-6 slide film - minimal WB needed, use gentle gray world
+            scale_factors_np = "gray_world_gentle"
+            logger.debug("E-6 detected - will apply gentle Gray World AWB")
+        elif mask_classification == "Likely B&W":
+            # B&W - no color correction needed
+            scale_factors_np = None
+            logger.debug("B&W detected - skipping WB")
         elif mask_classification == "Clear/Near Clear":
             scale_factors_np = None  # No WB needed
             logger.debug("Skipping WB (Clear/Near Clear base)")
@@ -344,13 +399,14 @@ class NegativeConverter:
         # --- Try GPU-accelerated path (Steps 1-3 in single dispatch) ---
         gpu_used = False
         corrected_float = None
-        use_gray_world = isinstance(scale_factors_np, str) and scale_factors_np == "gray_world"
+        use_gray_world = isinstance(scale_factors_np, str) and scale_factors_np in ("gray_world", "gray_world_gentle")
         
         try:
             if has_gpu_engine():
                 engine = get_gpu_engine()
                 
-                # For Gray World AWB, we need to calculate scale factors first
+                # For Gray World AWB variants, we need to calculate scale factors first
+                use_gray_world = isinstance(scale_factors_np, str) and scale_factors_np in ("gray_world", "gray_world_gentle")
                 if use_gray_world:
                     # Quick inversion on CPU to calculate averages
                     inverted_temp = 255.0 - image.astype(np.float32)
@@ -361,11 +417,17 @@ class NegativeConverter:
                     gpu_scale_factors = np.array([overall_avg / avg_r,
                                                   overall_avg / avg_g,
                                                   overall_avg / avg_b], dtype=np.float32)
-                    if self.params.get('gray_world_clamp_enabled', True):
+                    
+                    # Apply appropriate clamping based on mode
+                    if scale_factors_np == "gray_world_gentle":
+                        # E-6 slide film - very gentle correction
+                        gpu_scale_factors = np.clip(gpu_scale_factors, 0.95, 1.05)
+                        logger.debug(f"Gentle Gray World Scale Factors (E-6): {gpu_scale_factors}")
+                    elif self.params.get('gray_world_clamp_enabled', True):
                         gpu_scale_factors = np.clip(gpu_scale_factors,
                                                     self.params['wb_clamp_min'],
                                                     self.params['wb_clamp_max'])
-                    logger.debug(f"Gray World Scale Factors: {gpu_scale_factors}")
+                        logger.debug(f"Gray World Scale Factors: {gpu_scale_factors}")
                 else:
                     gpu_scale_factors = scale_factors_np
                 
@@ -408,6 +470,7 @@ class NegativeConverter:
 
             # --- STEP 2: WHITE BALANCE (Float32) ---
             logger.debug("Step 2: White Balance...")
+            is_gentle_mode = isinstance(scale_factors_np, str) and scale_factors_np == "gray_world_gentle"
             if use_gray_world:
                 # Calculate Gray World AWB
                 if is_cupy_backend():
@@ -425,11 +488,16 @@ class NegativeConverter:
                 scale_factors_np = np.array([overall_avg / avg_r,
                                              overall_avg / avg_g,
                                              overall_avg / avg_b], dtype=np.float32)
-                if self.params.get('gray_world_clamp_enabled', True):
+                # Apply appropriate clamping based on mode
+                if is_gentle_mode:
+                    # E-6 slide film - very gentle correction
+                    scale_factors_np = np.clip(scale_factors_np, 0.95, 1.05)
+                    logger.debug(f"Gentle Gray World Scale Factors (E-6): {scale_factors_np}")
+                elif self.params.get('gray_world_clamp_enabled', True):
                     scale_factors_np = np.clip(scale_factors_np,
                                                self.params['wb_clamp_min'],
                                                self.params['wb_clamp_max'])
-                logger.debug(f"Gray World Scale Factors: {scale_factors_np}")
+                    logger.debug(f"Gray World Scale Factors: {scale_factors_np}")
 
             if scale_factors_np is not None:
                 scale_factors = xp.asarray(scale_factors_np, dtype=xp.float32)
