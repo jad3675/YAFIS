@@ -1,0 +1,28 @@
+{
+  "id": "cyanotype",
+  "name": "Cyanotype",
+  "type": "photo",
+  "description": "Blue-toned monochrome simulating classic blueprint photography",
+  "category": "Black & White",
+  "thumbnail": "thumbnails/cyanotype.jpg",
+  "parameters": {
+    "brightness": 5,
+    "contrast": 15,
+    "saturation": -100,
+    "temperature": -50,
+    "tint": -10,
+    "highlights": 10,
+    "shadows": 5,
+    "vibrance": 0,
+    "toneCurve": {
+      "red": [[0, 5], [64, 45], [128, 95], [192, 155], [255, 215]],
+      "green": [[0, 10], [64, 55], [128, 110], [192, 170], [255, 230]],
+      "blue": [[0, 25], [64, 85], [128, 145], [192, 210], [255, 255]]
+    },
+    "colorBalance": {
+      "redBalance": 0.75,
+      "greenBalance": 0.90,
+      "blueBalance": 1.30
+    }
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": "bw-high-contrast",
+  "name": "B&W High Contrast",
+  "type": "photo",
+  "description": "Dramatic black and white with deep blacks",
+  "category": "Monochrome",
+  "thumbnail": "thumbnails/bw-high-contrast.jpg",
+  "parameters": {
+    "brightness": -5,
+    "contrast": 45,
+    "saturation": -100,
+    "temperature": 0,
+    "tint": 0,
+    "highlights": -10,
+    "shadows": -25,
+    "toneCurve": {
+      "rgb": [
+        [
+          0,
+          0
+        ],
+        [
+          64,
+          40
+        ],
+        [
+          128,
+          128
+        ],
+        [
+          192,
+          220
+        ],
+        [
+          255,
+          255
+        ]
+      ]
+    },
+    "bwMix": {
+      "red": 30,
+      "green": 60,
+      "blue": 10,
+      "yellow": 0,
+      "cyan": 0,
+      "magenta": 0
+    }
+  }
+}

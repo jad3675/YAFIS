@@ -1,0 +1,37 @@
+{
+  "id": "fuji-c200",
+  "name": "Fuji C200",
+  "description": "Clean consumer film with cooler tones and slight green bias",
+  "category": "Color Negative",
+  "thumbnail": "thumbnails/fujic200.jpg",
+  "parameters": {
+    "colorMatrix": [
+      [1.02, -0.01, -0.01],
+      [-0.02, 1.08, -0.06],
+      [-0.02, -0.03, 1.05]
+    ],
+    "toneCurve": {
+      "red": [[0, 8], [64, 65], [128, 125], [192, 190], [255, 250]],
+      "green": [[0, 10], [64, 70], [128, 132], [192, 195], [255, 252]],
+      "blue": [[0, 12], [64, 68], [128, 128], [192, 192], [255, 250]]
+    },
+    "grainParams": {
+      "intensity": 22,
+      "size": 0.9,
+      "roughness": 0.6
+    },
+    "colorBalance": {
+      "redShift": -3,
+      "greenShift": 5,
+      "blueShift": 2,
+      "redBalance": 0.97,
+      "greenBalance": 1.05,
+      "blueBalance": 1.02
+    },
+    "dynamicRange": {
+      "compression": 0.88,
+      "shadowPreservation": 0.55,
+      "highlightRolloff": 0.8
+    }
+  }
+}

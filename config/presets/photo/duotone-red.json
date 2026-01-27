@@ -1,0 +1,28 @@
+{
+  "id": "duotone-red",
+  "name": "Duotone Red",
+  "type": "photo",
+  "description": "Two-tone effect with red/orange emphasis for bold graphic look",
+  "category": "Creative",
+  "thumbnail": "thumbnails/duotone-red.jpg",
+  "parameters": {
+    "brightness": 5,
+    "contrast": 20,
+    "saturation": -60,
+    "temperature": 40,
+    "tint": 10,
+    "highlights": 10,
+    "shadows": 5,
+    "vibrance": -30,
+    "toneCurve": {
+      "red": [[0, 25], [64, 85], [128, 150], [192, 215], [255, 255]],
+      "green": [[0, 10], [64, 55], [128, 105], [192, 165], [255, 225]],
+      "blue": [[0, 5], [64, 40], [128, 85], [192, 140], [255, 200]]
+    },
+    "colorBalance": {
+      "redBalance": 1.30,
+      "greenBalance": 0.90,
+      "blueBalance": 0.75
+    }
+  }
+}

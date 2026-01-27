@@ -1,0 +1,37 @@
+{
+  "id": "sensia-100",
+  "name": "Fuji Sensia 100",
+  "description": "Consumer slide film with more muted colors than Velvia, natural look",
+  "category": "Slide Film",
+  "thumbnail": "thumbnails/sensia100.jpg",
+  "parameters": {
+    "colorMatrix": [
+      [1.12, -0.06, -0.06],
+      [-0.05, 1.12, -0.07],
+      [-0.06, -0.08, 1.14]
+    ],
+    "toneCurve": {
+      "red": [[0, 3], [64, 60], [128, 128], [192, 200], [255, 253]],
+      "green": [[0, 3], [64, 62], [128, 130], [192, 202], [255, 253]],
+      "blue": [[0, 5], [64, 65], [128, 130], [192, 198], [255, 250]]
+    },
+    "grainParams": {
+      "intensity": 10,
+      "size": 0.5,
+      "roughness": 0.35
+    },
+    "colorBalance": {
+      "redShift": 2,
+      "greenShift": 5,
+      "blueShift": 3,
+      "redBalance": 1.02,
+      "greenBalance": 1.05,
+      "blueBalance": 1.03
+    },
+    "dynamicRange": {
+      "compression": 0.75,
+      "shadowPreservation": 0.35,
+      "highlightRolloff": 0.6
+    }
+  }
+}

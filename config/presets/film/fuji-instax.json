@@ -1,0 +1,44 @@
+{
+  "id": "fuji-instax",
+  "name": "Fuji Instax",
+  "description": "Modern instant film with clean whites and punchy, vibrant colors",
+  "category": "Instant",
+  "thumbnail": "thumbnails/fujiinstax.jpg",
+  "parameters": {
+    "colorMatrix": [
+      [1.15, -0.08, -0.07],
+      [-0.05, 1.18, -0.13],
+      [-0.08, -0.10, 1.18]
+    ],
+    "toneCurve": {
+      "red": [[0, 8], [64, 68], [128, 135], [192, 205], [255, 255]],
+      "green": [[0, 8], [64, 70], [128, 138], [192, 208], [255, 255]],
+      "blue": [[0, 10], [64, 72], [128, 135], [192, 202], [255, 252]]
+    },
+    "grainParams": {
+      "intensity": 8,
+      "size": 0.4,
+      "roughness": 0.3
+    },
+    "colorBalance": {
+      "redShift": 3,
+      "greenShift": 5,
+      "blueShift": 0,
+      "redBalance": 1.03,
+      "greenBalance": 1.05,
+      "blueBalance": 1.0
+    },
+    "dynamicRange": {
+      "compression": 0.82,
+      "shadowPreservation": 0.5,
+      "highlightRolloff": 0.72
+    },
+    "specialEffects": {
+      "border": {
+        "enabled": true,
+        "color": [255, 255, 255],
+        "width": 0.08
+      }
+    }
+  }
+}
