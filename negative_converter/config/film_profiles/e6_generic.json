@@ -1,0 +1,22 @@
+{
+    "id": "e6_generic",
+    "name": "Generic E-6 (Slide/Reversal)",
+    "description": "Slide/reversal film profile. E-6 has a clear base with no orange mask.",
+    "correction_matrix": [
+        [1.1, -0.05, -0.05],
+        [-0.05, 1.1, -0.05],
+        [-0.05, -0.05, 1.1]
+    ],
+    "gamma": {
+        "red": 1.0,
+        "green": 1.0,
+        "blue": 1.0
+    },
+    "saturation_boost": 1.2,
+    "lab_correction": {
+        "a_target": 128.0,
+        "a_factor": 0.2,
+        "b_target": 128.0,
+        "b_factor": 0.2
+    }
+}

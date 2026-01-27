@@ -1,0 +1,22 @@
+{
+    "id": "ecn2_generic",
+    "name": "Generic ECN-2 (Motion Picture)",
+    "description": "Motion picture color negative film profile. ECN-2 has a darker orange/brown mask.",
+    "correction_matrix": [
+        [1.7, -0.25, -0.15],
+        [-0.15, 1.55, -0.15],
+        [-0.15, -0.35, 1.5]
+    ],
+    "gamma": {
+        "red": 0.92,
+        "green": 1.0,
+        "blue": 1.15
+    },
+    "saturation_boost": 1.1,
+    "lab_correction": {
+        "a_target": 128.0,
+        "a_factor": 0.6,
+        "b_target": 128.0,
+        "b_factor": 0.8
+    }
+}

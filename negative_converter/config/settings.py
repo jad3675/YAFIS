@@ -38,18 +38,66 @@ _CONVERSION_DEFAULTS_BASE = {
     ], dtype=np.float32),
 
     # Mask Detection & Classification Thresholds
-    "mask_sample_size": 10, # Size of corner samples
-    "mask_clear_sat_max": 40, # Max saturation for clear/neutral base
-    "mask_c41_hue_min": 8,
-    "mask_c41_hue_max": 22,
-    "mask_c41_sat_min": 70,
-    "mask_c41_val_min": 60,
-    "mask_c41_val_max": 210,
+    # These HSV values are used to classify film base types from corner samples.
+    # OpenCV uses H: 0-180, S: 0-255, V: 0-255
+    
+    "mask_sample_size": 10,  # Size of corner samples in pixels
+    "mask_clear_sat_max": 40,  # Max saturation for clear/neutral base
+    
+    # C-41 (Standard Color Negative) - Orange mask
+    # The orange mask in C-41 film typically has:
+    # - Hue: 8-22° (orange range in OpenCV's 0-180 scale, ~15-45° in 0-360)
+    # - Saturation: High (≥70) due to strong orange color
+    # - Value: Medium-high (60-210) - not too dark, not blown out
+    "mask_c41_hue_min": 8,   # Lower bound of orange hue
+    "mask_c41_hue_max": 22,  # Upper bound of orange hue
+    "mask_c41_sat_min": 70,  # Minimum saturation (orange is quite saturated)
+    "mask_c41_val_min": 60,  # Minimum brightness (not underexposed)
+    "mask_c41_val_max": 210, # Maximum brightness (not overexposed)
+    
+    # ECN-2 (Motion Picture Negative) - Darker orange/brown mask
+    # ECN-2 film has a denser, darker mask than consumer C-41:
+    # - Hue: 5-25° (slightly wider range, can be more brown)
+    # - Saturation: Medium-high (≥50) - less saturated than C-41
+    # - Value: Low (30-80) - distinctly darker than C-41
+    "mask_ecn2_hue_min": 5,   # Can be more red/brown
+    "mask_ecn2_hue_max": 25,  # Can extend into yellow-orange
+    "mask_ecn2_sat_min": 50,  # Lower saturation threshold
+    "mask_ecn2_val_min": 30,  # Much darker than C-41
+    "mask_ecn2_val_max": 80,  # Upper limit still quite dark
+    
+    # E-6 (Slide/Reversal Film) - Clear base, high value
+    # Slide film has no orange mask, just clear film base:
+    # - Saturation: Very low (≤25) - nearly colorless
+    # - Value: Very high (≥200) - clear/transparent base appears bright
+    "mask_e6_sat_max": 25,   # Nearly colorless
+    "mask_e6_val_min": 200,  # Very bright (clear base)
+    
+    # B&W Negative - Clear or slightly tinted, low saturation
+    # B&W film base is typically clear or has slight tint:
+    # - Saturation: Very low (≤20) - essentially grayscale
+    # - Value: Medium to high (100-255) - varies by film and exposure
+    "mask_bw_sat_max": 20,   # Essentially no color
+    "mask_bw_val_min": 100,  # Not too dark
+    "mask_bw_val_max": 255,  # Can be very bright
 
     # White Balance Parameters
-    "wb_target_gray": 128.0,
-    "wb_clamp_min": 0.8,
-    "wb_clamp_max": 1.3,
+    # These control how white balance correction is applied based on film type.
+    
+    # Standard C-41 white balance
+    "wb_target_gray": 128.0,  # Target neutral gray value after WB
+    "wb_target_gray_ecn2": 140.0,  # ECN-2 needs higher target due to darker base
+    "wb_clamp_min": 0.8,  # Minimum WB scale factor (prevents over-correction)
+    "wb_clamp_max": 1.3,  # Maximum WB scale factor
+    
+    # ECN-2 allows wider WB range due to darker, more variable mask
+    "wb_ecn2_clamp_min": 0.7,
+    "wb_ecn2_clamp_max": 1.5,
+    
+    # E-6 slide film uses very gentle correction (already color-balanced)
+    "wb_e6_clamp_min": 0.95,  # Very conservative - slide film is already balanced
+    "wb_e6_clamp_max": 1.05,
+    
     "gray_world_clamp_enabled": True,  # Allow disabling clamps for gray world WB
 
     # Mask Detection & Classification Robustness
