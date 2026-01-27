@@ -27,7 +27,8 @@
         "default_jpeg_quality": 100,
         "default_png_compression": 6,
         "filmstrip_thumb_size": 120,
-        "apply_embedded_icc_profile": true
+        "apply_embedded_icc_profile": true,
+        "gpu_acceleration_enabled": true
     },
     "LOGGING_LEVEL": "DEBUG"
 }
