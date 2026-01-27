@@ -25,7 +25,7 @@ from .settings_dialog import SettingsDialog
 from ..config import settings as app_settings # Import settings to call reload
 
 # Import IO and Processing components
-from negative_converter.processing.adjustments import apply_all_adjustments # Import the new function using absolute path
+from ..processing.adjustments import apply_all_adjustments
 # Standard imports assuming package structure is respected
 from ..io import image_loader, image_saver
 from ..processing import NegativeConverter, FilmPresetManager, PhotoPresetManager, ImageAdjustments
@@ -34,169 +34,12 @@ from ..processing.batch import process_batch_with_adjustments
 from ..services.conversion_service import ConversionService, PresetInfo
 
 
-# --- Worker Class for Background Processing ---
-class ImageProcessingWorker(QObject):
-    finished = pyqtSignal(object) # Emits processed image (numpy array)
-    error = pyqtSignal(str)       # Emits error message
-
-    def __init__(self, processing_func):
-        super().__init__()
-        self.processing_func = processing_func # Store the function passed from MainWindow
-        self._is_running = False
-
-    @pyqtSlot(object, dict)
-    def run(self, base_image, adjustments):
-        """Calls the main processing function passed during initialization."""
-        if self._is_running:
-            return
-        self._is_running = True
-
-        try:
-            processed_image = self.processing_func(base_image, adjustments)
-            if processed_image is None:
-                raise ValueError("Processing function returned None.")
-            self.finished.emit(processed_image)
-        except Exception as e:
-            logger.exception("Error during background processing call")
-            self.error.emit(f"Processing failed: {e}")
-        finally:
-            self._is_running = False
-
-# --- Worker for Initial Negative Conversion ---
-class InitialConversionWorker(QObject):
-    finished = pyqtSignal(object, str) # Emits (converted_image, mask_classification)
-    progress = pyqtSignal(int, int) # Emits (current_step, total_steps)
-    error = pyqtSignal(str)         # Emits error message
-    # Signal to request conversion with optional override - THIS WAS ALREADY ADDED, KEEPING
-    conversion_requested = pyqtSignal(object, object) # raw_image, override_type (object allows None)
-
-    def __init__(self, conversion_func):
-        super().__init__()
-        self.conversion_func = conversion_func # Should be MainWindow._run_initial_conversion
-        self._is_running = False
-
-    # Slot now takes raw_image and optional override_type
-    # Slot signature already updated, KEEPING
-    @pyqtSlot(object, object)
-    def run(self, raw_image, override_type=None):
-        """Calls the initial conversion function."""
-        if self._is_running:
-            return
-        self._is_running = True
-        try:
-            # Define the callback function to emit the progress signal
-            def progress_callback(step, total):
-                self.progress.emit(step, total)
-
-            # Pass the callback to the conversion function, which now returns (image, classification)
-            # Pass override_type to the backend conversion function - THIS WAS ALREADY ADDED, KEEPING
-            result_tuple = self.conversion_func(raw_image,
-                                                progress_callback=progress_callback,
-                                                override_mask_classification=override_type)
-            if result_tuple is None or result_tuple[0] is None:
-                 # Handle case where conversion returns None or (None, classification)
-                 raise ValueError("Initial conversion function failed or returned None image.")
-            converted_image, mask_classification = result_tuple
-            self.finished.emit(converted_image, mask_classification) # Emit both results
-        except Exception as e:
-            logger.exception("Error during initial conversion call")
-            self.error.emit(f"Initial conversion failed: {e}")
-        finally:
-            self._is_running = False
-
-# --- Auto Tone Worker ---
-class AutoToneWorker(QObject):
-    """Worker to compute Auto Tone parameters off the UI thread."""
-    finished = pyqtSignal(dict)  # emits tone params dict
-    error = pyqtSignal(str)
-
-    def __init__(self, compute_func):
-        super().__init__()
-        self.compute_func = compute_func
-        self._is_running = False
-
-    @pyqtSlot(object)
-    def run(self, base_image):
-        if self._is_running:
-            return
-        self._is_running = True
-        try:
-            params = self.compute_func(base_image)
-            if not isinstance(params, dict):
-                raise ValueError("Auto Tone returned invalid params.")
-            self.finished.emit(params)
-        except Exception as e:
-            logger.exception("Error during Auto Tone computation")
-            self.error.emit(f"Auto Tone failed: {e}")
-        finally:
-            self._is_running = False
-
-
-# --- Batch Processing Worker ---
-class BatchProcessingWorker(QObject):
-    """Worker object to run batch processing in a separate thread."""
-    finished = pyqtSignal(list) # Emits list of (file_path, success, message) tuples
-    progress = pyqtSignal(int, int) # Emits (current_processed_count, total_files)
-    error = pyqtSignal(str) # Emits error message if setup fails
-
-    def __init__(self, processing_func, parent=None):
-        super().__init__(parent)
-        self.processing_func = processing_func
-        self._is_running = False
-        self._inputs = None
-
-    # Updated signature to accept preset info, managers, format, and quality
-    def set_inputs(self, file_paths, output_dir, adjustments_dict, active_preset_info,
-                   converter, film_preset_manager, photo_preset_manager,
-                   output_format, quality_settings):
-        """Set the inputs required for the batch run."""
-        self._inputs = (file_paths, output_dir, adjustments_dict, active_preset_info,
-                        converter, film_preset_manager, photo_preset_manager,
-                        output_format, quality_settings)
-
-    @pyqtSlot()
-    def run(self):
-        """Execute the batch processing function."""
-        if self._is_running or not self._inputs:
-            self.error.emit("Worker is already running or inputs not set.")
-            return
-
-        self._is_running = True
-        # Unpack updated inputs
-        file_paths, output_dir, adjustments_dict, active_preset_info, \
-            converter, film_preset_manager, photo_preset_manager, \
-            output_format, quality_settings = self._inputs
-
-        try:
-            # For proper GUI progress, backend would need modification.
-            # Current simulation based on results count remains.
-            total_files = len(file_paths)
-            # Pass format and quality to the backend function
-            # Pass all necessary info, including preset details and managers, to the backend function
-            results = self.processing_func(
-                file_paths, output_dir, adjustments_dict, active_preset_info,
-                converter, film_preset_manager, photo_preset_manager,
-                output_format, quality_settings
-            )
-            # Simulate progress based on results collected
-            processed_count = 0
-            final_results = []
-            for res in results: # Assuming results are yielded or returned progressively
-                 processed_count += 1
-                 self.progress.emit(processed_count, total_files)
-                 final_results.append(res)
-
-            self.finished.emit(final_results)
-
-        except Exception as e:
-            logger.exception("Error during batch processing call")
-            self.error.emit(f"Batch processing failed: {e}")
-        finally:
-            self._is_running = False
-            self._inputs = None # Clear inputs after run
+from .workers import (ImageProcessingWorker, InitialConversionWorker, 
+                      AutoToneWorker, BatchProcessingWorker)
+from .main_window_mixins import FileHandlingMixin, BatchProcessingMixin, ViewManagementMixin
 
 # --- Main Window Class ---
-class MainWindow(QMainWindow):
+class MainWindow(QMainWindow, FileHandlingMixin, BatchProcessingMixin, ViewManagementMixin):
     """Main application window."""
     # Signal to request processing in the worker thread
     processing_requested = pyqtSignal(object, dict)
@@ -638,6 +481,44 @@ class MainWindow(QMainWindow):
         self.status_view_mode_label.setToolTip("Current display mode (Before/After comparison)")
         status_bar.addPermanentWidget(self.status_view_mode_label)
 
+        # GPU Status Indicator
+        self._setup_gpu_status_indicator(status_bar)
+
+    def _setup_gpu_status_indicator(self, status_bar):
+        """Set up the GPU status indicator in the status bar."""
+        from ..utils.gpu import get_gpu_info
+        
+        gpu_info = get_gpu_info()
+        
+        if gpu_info["enabled"]:
+            # GPU is enabled - show green indicator
+            backend = gpu_info["backend"]
+            device = gpu_info["device_name"] or "Unknown"
+            
+            if backend == "cuda":
+                label_text = " GPU: CUDA ✓ "
+                tooltip = f"GPU Acceleration: {device} (NVIDIA CUDA)"
+            elif backend == "rocm":
+                label_text = " GPU: ROCm ✓ "
+                tooltip = f"GPU Acceleration: {device} (AMD ROCm)"
+            elif backend == "wgpu":
+                label_text = " GPU: wgpu ✓ "
+                tooltip = f"GPU Acceleration: {device} (Vulkan/Metal/DX12)"
+            else:
+                label_text = " GPU: On ✓ "
+                tooltip = f"GPU Acceleration: {device}"
+            style = "color: #00aa00; font-weight: bold;"
+        else:
+            # GPU is disabled - show gray indicator
+            label_text = " GPU: Off "
+            tooltip = "GPU acceleration disabled (using CPU)\nInstall cupy-cuda12x (NVIDIA), cupy-rocm-6-0 (AMD), or wgpu for GPU support"
+            style = "color: #888888;"
+        
+        self.status_gpu_label = QLabel(label_text)
+        self.status_gpu_label.setToolTip(tooltip)
+        self.status_gpu_label.setStyleSheet(style)
+        status_bar.addPermanentWidget(self.status_gpu_label)
+
     # --- Status Bar Update Methods ---
 
     def _update_status_filename(self, file_path):
@@ -673,13 +554,6 @@ class MainWindow(QMainWindow):
         else:
             self.status_neg_type_label.setText(" Negative Type: N/A ")
 
-    @pyqtSlot(str)
-    def _update_status_view_mode(self, view_mode):
-        """Slot to update the view mode label based on signal from ImageViewer."""
-        if view_mode == 'before':
-            self.status_view_mode_label.setText(" View: Before ")
-        else: # Default to 'after'
-            self.status_view_mode_label.setText(" View: After ")
     def create_toolbars(self): pass # No other toolbars currently
 
     def create_batch_toolbar(self):
@@ -807,138 +681,11 @@ class MainWindow(QMainWindow):
             view_menu.addAction(self.view_view_toolbar_action)
         self.view_toolbar.setVisible(True) # Start visible
 
-    def select_batch_output_directory(self):
-        """Opens a dialog to select the output directory for batch processing."""
-        # Suggest starting from the last used directory or user's home/pictures
-        start_dir = self._batch_output_dir if self._batch_output_dir else os.path.expanduser("~")
-        folder_path = QFileDialog.getExistingDirectory(self, "Select Output Folder for Batch Processing", start_dir)
-        if folder_path:
-            self._batch_output_dir = folder_path
-            self.output_dir_label.setText(f" Output: ...{os.path.basename(folder_path)} ")
-            self.output_dir_label.setToolTip(f"Output Directory: {folder_path}")
-            self.update_ui_state() # Update button states
-        else:
-            self.statusBar().showMessage("Output directory selection cancelled.", 2000)
 
-    def start_batch_processing(self): # noqa C901
-        """Initiates the batch processing workflow."""
-        checked_files = self.filmstrip_widget.get_checked_image_paths()
-        if not checked_files:
-            QMessageBox.warning(self, "No Images Selected", "Please check the images in the filmstrip you want to process.")
-            return
-
-        if not self._batch_output_dir or not os.path.isdir(self._batch_output_dir):
-            QMessageBox.warning(self, "Output Directory Not Set", "Please select a valid output directory using the 'Set Output Dir' button.")
-            return
-
-        # Get current adjustments from the panel
-        current_adjustments = self.adjustment_panel.get_adjustments()
-
-        # Get active preset info (if any) from the stored state
-        # This is set when a preset is applied and cleared when manual adjustments are made
-        active_preset_info = self._active_preset_details
-
-        # Get output format and quality settings from the toolbar
-        output_format = self.format_combo.currentText()
-        quality_settings = {}
-        if output_format == ".jpg":
-            quality_settings['quality'] = self.quality_spinbox.value()
-        elif output_format == ".png":
-            quality_settings['png_compression'] = self.quality_spinbox.value()
-        # Add other formats (like WebP) if supported by the saver and toolbar
-
-        # Disable UI elements during batch processing
-        self.process_batch_action.setEnabled(False)
-        self.batch_progress_bar.setVisible(True)
-        self.batch_progress_bar.setValue(0)
-        self.statusBar().showMessage(f"Starting batch processing for {len(checked_files)} images...")
-
-        # Set inputs for the worker
-        self.batch_worker.set_inputs(
-            checked_files,
-            self._batch_output_dir,
-            current_adjustments,
-            active_preset_info, # Pass preset info
-            self.negative_converter, # Pass converter instance
-            self.film_preset_manager, # Pass managers
-            self.photo_preset_manager,
-            output_format, # Pass format
-            quality_settings # Pass quality/compression
-        )
-
-        # Start the worker using QMetaObject.invokeMethod to ensure it runs in the worker's thread
-        QMetaObject.invokeMethod(self.batch_worker, "run", Qt.ConnectionType.QueuedConnection)
-
-    @pyqtSlot(int, int)
-    def _handle_batch_progress(self, current, total):
-        """Update the progress bar."""
-        if total > 0:
-            percentage = int((current / total) * 100)
-            self.batch_progress_bar.setValue(percentage)
-            self.statusBar().showMessage(f"Batch processing: {current}/{total} images...")
-        else:
-            self.batch_progress_bar.setValue(0)
-
-    @pyqtSlot(list)
-    def _handle_batch_finished(self, results):
-        """Handle completion of the batch processing task."""
-        self.batch_progress_bar.setVisible(False)
-        self.update_ui_state() # Re-enable UI
-
-        success_count = sum(1 for _, success, _ in results if success)
-        fail_count = len(results) - success_count
-
-        summary_message = f"Batch processing finished.\nSuccessfully processed: {success_count}\nFailed: {fail_count}"
-        detailed_message = summary_message + "\n\nDetails:\n"
-        for file_path, success, message in results:
-            status = "OK" if success else "FAIL"
-            detailed_message += f"- {os.path.basename(file_path)}: {status} ({message})\n"
-
-        logger.info("Batch processing results:\n%s", detailed_message)
-        QMessageBox.information(self, "Batch Processing Complete", summary_message)
-        self.statusBar().showMessage("Batch processing complete.", 5000)
-
-    @pyqtSlot(str)
-    def _handle_batch_error(self, error_message):
-        """Handle errors reported by the batch worker."""
-        self.batch_progress_bar.setVisible(False)
-        self.update_ui_state() # Re-enable UI
-        QMessageBox.critical(self, "Batch Processing Error", f"An error occurred during batch processing:\n{error_message}")
-        self.statusBar().showMessage(f"Batch processing error: {error_message}", 5000)
 
 
     # --- Format/Quality Toolbar Logic ---
 
-    @pyqtSlot(str)
-    def _update_quality_widget_visibility(self, selected_format):
-        """Show/hide and configure the quality spinbox based on selected format."""
-        if selected_format == ".jpg":
-            self.quality_label.setText(" Quality: ")
-            self.quality_spinbox.setRange(1, 100)
-            self.quality_spinbox.setToolTip("Set JPEG quality (1-100)")
-            # Fetch default from settings when format changes
-            self.quality_spinbox.setValue(app_settings.UI_DEFAULTS.get("default_jpeg_quality", 95))
-            self.quality_label.setVisible(True)
-            self.quality_spinbox.setVisible(True)
-        elif selected_format == ".png":
-            self.quality_label.setText(" Compress: ")
-            self.quality_spinbox.setRange(0, 9)
-            self.quality_spinbox.setToolTip("Set PNG compression level (0-9)")
-            # Fetch default from settings when format changes
-            self.quality_spinbox.setValue(app_settings.UI_DEFAULTS.get("default_png_compression", 6))
-            self.quality_label.setVisible(True)
-            self.quality_spinbox.setVisible(True)
-        # Add elif for WebP if needed, similar to JPG
-        # elif selected_format == ".webp":
-        #     self.quality_label.setText(" Quality: ")
-        #     self.quality_spinbox.setRange(0, 100) # WebP quality 0-100
-        #     self.quality_spinbox.setToolTip("Set WebP quality (0-100)")
-        #     self.quality_spinbox.setValue(app_settings.UI_DEFAULTS.get("default_webp_quality", 90)) # Need separate setting?
-        #     self.quality_label.setVisible(True)
-        #     self.quality_spinbox.setVisible(True)
-        else: # TIFF or other formats without quality setting here
-            self.quality_label.setVisible(False)
-            self.quality_spinbox.setVisible(False)
 
     def update_ui_state(self):
         """Enable/disable actions and controls based on application state."""
@@ -981,173 +728,6 @@ class MainWindow(QMainWindow):
         self._update_quality_widget_visibility(self.format_combo.currentText())
 
 
-    # --- File Operations ---
-
-    def open_image(self):
-        """Open an image file using a file dialog."""
-        file_filter = "Image Files (*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.webp);;All Files (*)"
-        file_path, _ = QFileDialog.getOpenFileName(self, "Open Negative Image", "", file_filter)
-
-        if file_path:
-            self.statusBar().showMessage(f"Loading image: {os.path.basename(file_path)}...")
-            QApplication.processEvents() # Allow UI to update
-            try:
-                # Store raw loaded image first, unpack all return values
-                self.raw_loaded_image, original_mode, file_size = self.conversion_service.load_image(file_path)
-                if self.raw_loaded_image is None:
-                    raise ValueError("Image loader returned None.")
-
-                self.current_file_path = file_path
-                self._current_file_size = file_size # Use file size returned by loader
-                self._current_original_mode = original_mode
-                self._current_negative_type = None # Reset detected type
-
-                # Update status bar immediately with file info
-                self._update_status_filename(self.current_file_path)
-                self._update_status_size(self._current_file_size)
-                self._update_status_mode(self._current_original_mode)
-                self._update_status_neg_type(None) # Clear neg type initially
-
-                # Reset UI elements before conversion
-                self.adjustment_panel.reset_adjustments() # Correct method name
-                self.image_viewer.set_image(None) # Clear previous image
-                self.previous_base_image = None # Clear undo state
-                self.compare_action.setChecked(False) # Ensure compare is off
-                # self.image_viewer.set_display_mode('after') # REMOVED: set_image handles this
-                self.histogram_widget.clear_histogram() # Clear histogram
-
-                # --- Trigger Initial Conversion in Worker Thread ---
-                QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor) # Set busy cursor
-                self.statusBar().showMessage("Starting initial negative conversion...", 0) # Persistent message
-                self._is_converting_initial = True
-                self.update_ui_state() # Disable controls
-                # Emit signal with raw image, override is None by default
-                self.initial_conversion_requested.emit(self.raw_loaded_image, None)
-
-
-
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to load or start conversion for image:\n{file_path}\n\nError: {e}")
-                self.statusBar().showMessage(f"Error loading image: {e}", 5000)
-                self.raw_loaded_image = None
-                self.current_file_path = None
-                self._is_converting_initial = False # Ensure flag is reset on error
-                QApplication.restoreOverrideCursor() # Restore cursor on error
-                self.update_ui_state() # Re-enable controls if needed
-
-    def save_image_as(self):
-        """Save the currently processed image to a new file."""
-        if self.base_image is None:
-            QMessageBox.warning(self, "No Image", "No image is currently loaded or processed.")
-            return
-
-        # Suggest filename based on current file + suffix
-        if self.current_file_path:
-            base, _ = os.path.splitext(os.path.basename(self.current_file_path))
-            # Default to JPG, but could potentially use the batch format combo's value?
-            suggested_name = f"{base}_positive.jpg"
-        else:
-            suggested_name = "positive_image.jpg"
-
-        # Define filter string for supported save formats
-        save_filter = "JPEG Image (*.jpg *.jpeg);;PNG Image (*.png);;WebP Image (*.webp);;TIFF Image (*.tif *.tiff)" # Added WebP
-
-        file_path, selected_filter = QFileDialog.getSaveFileName(self, "Save Positive Image As", suggested_name, save_filter)
-
-        if file_path:
-            try:
-                self.statusBar().showMessage("Applying final adjustments...")
-                QApplication.processEvents()
-                # Get the final adjusted image using the background worker for consistency
-                # This ensures the saved image matches the preview exactly
-                final_image_to_save = self._get_fully_adjusted_image(self.base_image, self.adjustment_panel.get_adjustments())
-
-                if final_image_to_save is None:
-                    raise ValueError("Failed to get final adjusted image for saving.")
-
-                self.statusBar().showMessage(f"Saving image to {os.path.basename(file_path)}...")
-                QApplication.processEvents()
-
-                # Determine format and quality parameters from settings
-                quality_params = {}
-                ext = os.path.splitext(file_path)[1].lower()
-
-                if ext in ['.jpg', '.jpeg']:
-                    # Fetch current JPEG quality from settings
-                    quality = app_settings.UI_DEFAULTS.get("default_jpeg_quality", 95)
-                    quality_params['quality'] = quality
-                    logger.debug("Using JPEG quality from settings: %s", quality)
-
-                elif ext == '.png':
-                    # Fetch current PNG compression from settings
-                    compression = app_settings.UI_DEFAULTS.get("default_png_compression", 6) # Using 6 as a more typical default now
-                    quality_params['png_compression'] = compression
-                    logger.debug("Using PNG compression from settings: %s", compression)
-
-                elif ext == '.webp':
-                    # Fetch current WebP quality from settings (assuming it uses 'default_jpeg_quality' for simplicity, or add a specific setting)
-                    # Let's reuse JPEG quality setting for WebP for now.
-                    quality = app_settings.UI_DEFAULTS.get("default_jpeg_quality", 90) # Default 90 for WebP if not set
-                    quality_params['quality'] = quality
-                    logger.debug("Using WebP quality from settings: %s", quality)
-
-                elif ext in ['.tif', '.tiff']:
-                    # Add TIFF specific params if needed, e.g., compression
-                    quality_params['compression'] = 'tiff_lzw' # Example: LZW compression
-                    logger.debug("Using TIFF LZW compression.")
-
-                # Other formats currently don't have specific quality/compression settings here
-
-                # Save using the saver module
-                success = self.conversion_service.save_image(final_image_to_save, file_path, **quality_params)
-
-                if success:
-                    self.statusBar().showMessage(f"Image saved successfully to {file_path}", 5000)
-                else:
-                    raise ValueError("Failed to save image using image_saver.")
-
-            except Exception as e:
-                 QMessageBox.critical(self, "Error", f"Failed to save image:\n{e}")
-                 self.statusBar().showMessage(f"Error saving image: {e}", 5000)
-            # finally: # No need for update_ui_state here usually
-            #      self.update_ui_state()
-
-    def open_batch_dialog(self):
-        """Opens a dialog to select a folder for batch processing."""
-        folder_path = QFileDialog.getExistingDirectory(self, "Select Folder Containing Negatives")
-        if folder_path:
-            self.statusBar().showMessage(f"Scanning folder: {folder_path}...")
-            QApplication.processEvents()
-            try:
-                image_files = self._find_image_files(folder_path)
-
-                if image_files:
-                    self.filmstrip_widget.add_images(image_files)
-                    self.filmstrip_dock.setVisible(True)
-                    # Visibility of batch toolbar handled by update_ui_state
-                    self.statusBar().showMessage(f"Loaded {len(image_files)} images for batch processing.", 3000)
-                else:
-                    self.filmstrip_dock.setVisible(False) # Hide if no images found
-                    self.statusBar().showMessage(f"No supported image files found in {folder_path}.", 3000)
-                    QMessageBox.information(self, "No Images Found", f"No supported image files (e.g., JPG, PNG, TIF) were found in the selected folder:\n{folder_path}")
-
-                self.update_ui_state() # Update button states and toolbar visibility
-
-            except Exception as e:
-                 QMessageBox.critical(self, "Error Scanning Folder", f"An error occurred while scanning the folder:\n{e}")
-                 self.statusBar().showMessage(f"Error scanning folder: {e}", 5000)
-                 self.filmstrip_dock.setVisible(False)
-                 self.update_ui_state()
-
-    def _find_image_files(self, folder_path):
-        """Recursively find supported image files in a folder."""
-        supported_extensions = ('.png', '.jpg', '.jpeg', '.tif', '.tiff', '.bmp', '.webp')
-        image_files = []
-        for root, _, files in os.walk(folder_path):
-            for file in files:
-                if file.lower().endswith(supported_extensions):
-                    image_files.append(os.path.join(root, file))
-        return sorted(image_files)
 
     def closeEvent(self, event):
         """Handle application close event."""
@@ -1397,118 +977,8 @@ class MainWindow(QMainWindow):
         else:
             self.statusBar().showMessage("Nothing to undo.", 2000)
 
-    def toggle_compare_view(self):
-        """Toggle the image viewer between 'before' and 'after'.
-
-        If wipe-compare is active, disable it and fall back to the original toggle behavior.
-        """
-        if self.initial_converted_image is None:
-            self.compare_action.setChecked(False) # Cannot compare if no initial image
-            return
-
-        # If wipe is enabled, turn it off when user hits toggle-compare.
-        if hasattr(self, "compare_slider"):
-            self.image_viewer.set_compare_wipe_enabled(False)
-            self.compare_slider.blockSignals(True)
-            self.compare_slider.setValue(100)
-            self.compare_slider.blockSignals(False)
-
-        # Call the ImageViewer's internal toggle method
-        self.image_viewer.toggle_compare_mode()
-
-        # Update the histogram based on the viewer's *new* mode
-        if self.image_viewer._display_mode == 'before': # Access internal state (less ideal, but necessary here)
-            self.histogram_widget.update_histogram(self.initial_converted_image)
-        else: # 'after' mode
-            current_adjusted = self._get_fully_adjusted_image(self.base_image, self.adjustment_panel.get_adjustments())
-            if current_adjusted is not None: # Handle potential error in adjustment
-                self.histogram_widget.update_histogram(current_adjusted)
-            else: # Fallback if adjustment fails
-                self.histogram_widget.update_histogram(self.base_image)
 
 
-    def _on_compare_slider_pressed(self):
-        self._compare_slider_is_dragging = True
-
-    def _on_compare_slider_released(self):
-        self._compare_slider_is_dragging = False
-        # Apply final value immediately on release (so the user sees the exact position).
-        if self._compare_slider_pending_value is not None:
-            self._apply_compare_slider_value(int(self._compare_slider_pending_value), update_histogram=True)
-            self._compare_slider_pending_value = None
-        else:
-            # If no pending value, still ensure histogram reflects current endpoint if applicable.
-            try:
-                self._apply_compare_slider_value(int(self.compare_slider.value()), update_histogram=True)
-            except Exception:
-                # Never let histogram update failures lock the UI.
-                logger.exception("Failed to update histogram on compare slider release")
-
-    def _apply_pending_compare_slider_value(self):
-        if self._compare_slider_pending_value is None:
-            return
-
-        # While dragging, skip histogram work (it can be expensive for large images).
-        update_hist = not self._compare_slider_is_dragging
-        self._apply_compare_slider_value(
-            int(self._compare_slider_pending_value),
-            update_histogram=update_hist,
-        )
-
-        # Keep pending value while dragging so release can apply instantly; clear only if not dragging.
-        if not self._compare_slider_is_dragging:
-            self._compare_slider_pending_value = None
-
-    def _on_compare_slider_changed(self, value: int):
-        """Throttle wipe-compare updates to avoid repaint storms."""
-        if self.initial_converted_image is None or self.base_image is None:
-            return
-
-        self._compare_slider_pending_value = int(value)
-
-        # While dragging: debounce viewer updates and skip histogram work.
-        if self._compare_slider_is_dragging:
-            self._compare_slider_debounce_timer.start(self._compare_slider_debounce_ms)
-            return
-
-        # Not dragging (keyboard/step): apply immediately including histogram endpoints.
-        self._apply_compare_slider_value(int(value), update_histogram=True)
-
-    def _apply_compare_slider_value(self, value: int, *, update_histogram: bool):
-        """Apply a compare slider value (0..100) to the viewer.
-
-        update_histogram:
-          - False while dragging (avoid extra work / UI stalls)
-          - True on release (update at endpoints only)
-        """
-        v = int(value)
-
-        # Endpoints: show full before/after explicitly (wipe disabled).
-        if v <= 0:
-            self.image_viewer.set_compare_wipe_enabled(False)
-            self.image_viewer.set_display_mode('before')
-        elif v >= 100:
-            self.image_viewer.set_compare_wipe_enabled(False)
-            self.image_viewer.set_display_mode('after')
-        else:
-            # Mid-range: enable wipe compare.
-            self.image_viewer.set_compare_wipe_enabled(True)
-            self.image_viewer.set_compare_wipe_percent(v)
-
-        if not update_histogram:
-            return
-
-        # Histogram: update only at endpoints.
-        if v <= 0:
-            self.histogram_widget.update_histogram(self.initial_converted_image)
-        elif v >= 100:
-            # IMPORTANT: don't recompute full adjustments on the UI thread here.
-            # Just show the histogram of the current displayed “after” image.
-            after_img = getattr(self.image_viewer, "_current_image", None)
-            if after_img is not None:
-                self.histogram_widget.update_histogram(after_img)
-            else:
-                self.histogram_widget.update_histogram(self.base_image)
 
     # --- Auto Adjustment Handlers ---
 
@@ -1746,40 +1216,4 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Settings changes cancelled.", 3000)
 
 
-# --- Application Entry Point ---
-
-def main():
-    """Main function to run the application."""
-
-    # --- Logging ---
-    # Logging is configured automatically when 'utils.logger' is imported
-    # by any component (e.g., MainWindow indirectly).
-    # The level is determined by 'config.settings.LOGGING_LEVEL'.
-    # We can optionally add a print statement here to confirm the level used.
-    logger.info("Logging level set to: %s (via config/settings.py)", app_settings.LOGGING_LEVEL)
-
-    # Create the Qt Application
-    app = QApplication(sys.argv)
-
-    # Application details
-    app.setApplicationName("YAFIS")
-    app.setOrganizationName("YAFIS")  # used for QSettings; keep stable
-
-    # App icon (best-effort; SVG requires QtSvg at runtime).
-    try:
-        icon_path = os.path.join(os.path.dirname(__file__), "ui", "icons", "yafis.svg")
-        if os.path.exists(icon_path):
-            app.setWindowIcon(QIcon(icon_path))
-    except Exception:
-        logger.exception("Failed to set application icon")
-
-    # Create and show the main window
-    main_window = MainWindow()
-    main_window.show()
-
-    # Start the Qt event loop
-    sys.exit(app.exec())
-
-if __name__ == "__main__":
-    # This block ensures the code runs only when the script is executed directly
-    main()
+# (entrypoint moved to [`negative_converter.main.main()`](negative_converter/main.py:22))

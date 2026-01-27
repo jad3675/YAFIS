@@ -7,7 +7,7 @@ from PyQt6.QtGui import QIcon
 import json # Added for dummy presets in main
 import numpy as np # Added for dummy image in main
 
-from negative_converter.utils.logger import get_logger
+from ..utils.logger import get_logger
 
 # Assuming PhotoPresetManager is in the processing package
 try:
@@ -303,23 +303,23 @@ if __name__ == '__main__':
             self.setGeometry(300, 300, 350, 400)
 
         def get_current_image_for_processing(self):
-            print("Main window: Providing current image for processing.")
+            logger.debug("DummyMainWindow: Providing current image for processing.")
             return self.image.copy()
 
         # Updated handle_preview signature
         def handle_preview(self, image, preset_type, preset_id, intensity):
-            print("-" * 20)
             if preset_id is None:
-                print("Main window: PREVIEW request for original image.")
+                logger.debug("DummyMainWindow: PREVIEW request for original image.")
                 self.preview_image = image.copy()
             elif preset_type == 'photo':
-                print(f"Main window: PREVIEW request for photo preset '{preset_id}', intensity {intensity:.2f}")
+                logger.debug("DummyMainWindow: PREVIEW request for photo preset '%s', intensity %.2f", preset_id, intensity)
                 try:
                     self.preview_image = self.photo_preset_mgr.apply_photo_preset(image, preset_id, intensity)
-                    print(f"Main window: Photo preview simulation successful.")
-                except Exception as e: print(f"Main window: Error during photo preview sim: {e}")
+                    logger.debug("DummyMainWindow: Photo preview simulation successful.")
+                except Exception as e:
+                    logger.error("DummyMainWindow: Error during photo preview sim: %s", e)
             else:
-                 print(f"Main window: Received unknown preset type '{preset_type}' in preview handler.")
+                 logger.warning("DummyMainWindow: Received unknown preset type '%s' in preview handler.", preset_type)
                  self.preview_image = image.copy() # Fallback
 
             cv2.imshow("Preview", cv2.cvtColor(self.preview_image, cv2.COLOR_RGB2BGR))
@@ -328,20 +328,20 @@ if __name__ == '__main__':
 
         # Updated handle_apply signature
         def handle_apply(self, image, preset_type, preset_id, intensity):
-            print("-" * 20)
             if preset_id is None:
-                 print("Main window: APPLY request ignored (no preset selected).")
+                 logger.warning("DummyMainWindow: APPLY request ignored (no preset selected).")
                  return
 
             if preset_type == 'photo':
-                print(f"Main window: APPLY request for photo preset '{preset_id}', intensity {intensity:.2f}")
+                logger.info("DummyMainWindow: APPLY request for photo preset '%s', intensity %.2f", preset_id, intensity)
                 try:
                     applied_img = self.photo_preset_mgr.apply_photo_preset(image, preset_id, intensity)
-                    print(f"Main window: Photo apply successful. Updating main image.")
+                    logger.info("DummyMainWindow: Photo apply successful. Updating main image.")
                     self.image = applied_img
-                except Exception as e: print(f"Main window: Error during photo apply sim: {e}")
+                except Exception as e:
+                    logger.error("DummyMainWindow: Error during photo apply sim: %s", e)
             else:
-                 print(f"Main window: Received unknown preset type '{preset_type}' in apply handler.")
+                 logger.warning("DummyMainWindow: Received unknown preset type '%s' in apply handler.", preset_type)
 
 
             self.preview_image = self.image.copy()
@@ -358,9 +358,9 @@ if __name__ == '__main__':
     # Clean up dummy presets
     try:
         os.remove(dummy_photo_presets_file)
-        print("\nCleaned up temporary preset file.")
+        logger.info("Cleaned up temporary preset file.")
     except Exception as e:
-        print(f"\nCould not remove temp preset file: {e}")
+        logger.error("Could not remove temp preset file: %s", e)
 
     cv2.destroyAllWindows()
     sys.exit(exit_code)

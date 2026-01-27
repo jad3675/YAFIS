@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBo
 from PyQt6.QtCore import pyqtSignal, QPointF, QRectF, Qt
 from PyQt6.QtGui import QPainter, QPen, QBrush, QColor, QPolygonF, QPainterPath
 
-from negative_converter.utils.logger import get_logger
+from ..utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -279,7 +279,7 @@ if __name__ == '__main__':
     mainWin.setWindowTitle("Curves Widget Test")
     curves_widget = CurvesWidget()
     mainWin.setCentralWidget(curves_widget)
-    curves_widget.curve_changed.connect(lambda channel, points: print(f"Curve changed for {channel}: {points}"))
+    curves_widget.curve_changed.connect(lambda channel, points: logger.debug("Curve changed for %s: %s", channel, points))
     mainWin.setGeometry(300, 300, 300, 350) # Adjusted size
     mainWin.show()
     sys.exit(app.exec())

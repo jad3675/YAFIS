@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 
-from negative_converter.utils.logger import get_logger
+from ..utils.logger import get_logger
 
 # Import the settings and the save function using relative import
 # Go up one level from 'ui' to 'negative_converter', then down to 'config'
@@ -198,10 +198,49 @@ class SettingsDialog(QDialog):
     def _create_system_tab(self):
         layout = QFormLayout(self.system_tab)
 
+        # GPU Acceleration toggle
+        layout.addRow(QLabel("<b>GPU Acceleration</b>"))
+        self.gpu_enabled = QCheckBox()
+        self.gpu_enabled.setToolTip(
+            "Enable or disable GPU acceleration for image processing.\n"
+            "Disabling may be useful for debugging or if GPU causes issues."
+        )
+        layout.addRow("Enable GPU Acceleration:", self.gpu_enabled)
+        
+        # GPU status label
+        self.gpu_status_label = QLabel()
+        self.gpu_status_label.setStyleSheet("color: gray; font-style: italic;")
+        layout.addRow("", self.gpu_status_label)
+        self._update_gpu_status_label()
+        
+        # Connect checkbox to update label
+        self.gpu_enabled.stateChanged.connect(self._update_gpu_status_label)
+        
+        layout.addRow(QLabel(""))  # Spacer
+
         self.logging_level = QComboBox()
         self.logging_level.addItems(["DEBUG", "INFO", "WARNING", "ERROR"])
         layout.addRow("Logging Level:", self.logging_level)
         layout.addRow(QLabel("<i><b>Note:</b> Logging level change requires an <b>application restart</b>.</i>"))
+
+    def _update_gpu_status_label(self):
+        """Update the GPU status label based on current state."""
+        try:
+            from ..utils.gpu import get_gpu_info, is_gpu_available
+            gpu_info = get_gpu_info()
+            
+            if not gpu_info.get("available", False):
+                self.gpu_status_label.setText("No GPU detected")
+                self.gpu_enabled.setEnabled(False)
+                self.gpu_enabled.setChecked(False)
+            else:
+                device_name = gpu_info.get("device_name", "Unknown GPU")
+                if self.gpu_enabled.isChecked():
+                    self.gpu_status_label.setText(f"Will use: {device_name}")
+                else:
+                    self.gpu_status_label.setText(f"Available: {device_name} (disabled)")
+        except Exception as e:
+            self.gpu_status_label.setText(f"GPU status unknown: {e}")
 
 
     def _get_setting(self, category, key, default_value):
@@ -265,7 +304,11 @@ class SettingsDialog(QDialog):
         self.default_png_compression.setValue(app_settings.UI_DEFAULTS.get("default_png_compression", 6))
         self.filmstrip_thumb_size.setValue(app_settings.UI_DEFAULTS.get("filmstrip_thumb_size", 120))
 
-        # System Tab
+        # System Tab - GPU and Logging
+        gpu_enabled = app_settings.UI_DEFAULTS.get("gpu_acceleration_enabled", True)
+        self.gpu_enabled.setChecked(gpu_enabled)
+        self._update_gpu_status_label()
+        
         current_level = app_settings.LOGGING_LEVEL
         if current_level in ["DEBUG", "INFO", "WARNING", "ERROR"]:
             self.logging_level.setCurrentText(current_level)
@@ -310,6 +353,7 @@ class SettingsDialog(QDialog):
                     "default_png_compression": self.default_png_compression.value(),
                     "filmstrip_thumb_size": self.filmstrip_thumb_size.value(),
                     "apply_embedded_icc_profile": self.apply_embedded_icc_profile.isChecked(),
+                    "gpu_acceleration_enabled": self.gpu_enabled.isChecked(),
                 },
                 "LOGGING_LEVEL": self.logging_level.currentText()
             }
@@ -323,6 +367,14 @@ class SettingsDialog(QDialog):
 
 
             if app_settings.save_user_settings(settings_to_save):
+                # Apply GPU setting immediately
+                try:
+                    from ..utils.gpu import set_gpu_enabled, is_gpu_available
+                    if is_gpu_available():
+                        set_gpu_enabled(self.gpu_enabled.isChecked())
+                except Exception as e:
+                    logger.warning("Could not apply GPU setting: %s", e)
+                
                 QMessageBox.information(
                     self,
                     "Settings Saved",

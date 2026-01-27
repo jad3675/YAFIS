@@ -19,8 +19,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QSize
 from PyQt6.QtGui import QIcon
 
-from negative_converter.utils.logger import get_logger
-from negative_converter.processing.adjustment_presets import AdjustmentPresetManager
+from ..utils.logger import get_logger
+from ..processing.adjustment_presets import AdjustmentPresetManager
 
 # Import the placeholder curves widget
 from .curves_widget import CurvesWidget
@@ -1084,14 +1084,14 @@ if __name__ == '__main__':
             self.panel.auto_level_requested.connect(self.handle_auto_level)
             self.panel.auto_color_requested.connect(self.handle_auto_color)
             self.panel.auto_tone_requested.connect(self.handle_auto_tone)
-            self.panel.wb_picker_requested.connect(lambda: print("WB Picker Requested")) # Simple print for picker
+            self.panel.wb_picker_requested.connect(lambda: logger.debug("DummyMainWindow: WB Picker Requested")) # Simple log for picker
 
         def handle_adjustments(self, adjustments):
-            # print("Adjustments Changed:", adjustments)
-            pass # Avoid excessive printing during slider drag
+            # logger.debug("Adjustments Changed: %s", adjustments)
+            pass # Avoid excessive logging during slider drag
 
         def handle_awb(self, method):
-            print(f"AWB Requested: Method={method}")
+            logger.debug("DummyMainWindow: AWB Requested: Method=%s", method)
             # Simulate applying AWB by slightly changing temp/tint
             current_temp = self.panel._current_adjustments['temp']
             current_tint = self.panel._current_adjustments['tint']
@@ -1104,19 +1104,19 @@ if __name__ == '__main__':
 
 
         def handle_auto_level(self, mode, midrange):
-            print(f"Auto Level Requested: Mode={mode}, Midrange={midrange}")
+            logger.debug("DummyMainWindow: Auto Level Requested: Mode=%s, Midrange=%s", mode, midrange)
             # Simulate applying Auto Level by changing level sliders
             self.panel.set_adjustments({'levels_in_black': 5, 'levels_in_white': 250, 'levels_gamma': 1.05})
             self.panel.adjustment_changed.emit(self.panel.get_adjustments())
 
         def handle_auto_color(self, method):
-            print(f"Auto Color Requested: Method={method}")
+            logger.debug("DummyMainWindow: Auto Color Requested: Method=%s", method)
             # Simulate applying Auto Color by changing contrast/saturation
             self.panel.set_adjustments({'contrast': 5, 'saturation': 3})
             self.panel.adjustment_changed.emit(self.panel.get_adjustments())
 
         def handle_auto_tone(self):
-            print(f"Auto Tone Requested")
+            logger.debug("DummyMainWindow: Auto Tone Requested")
             # Simulate applying Auto Tone by changing multiple sliders
             self.panel.set_adjustments({'brightness': 2, 'contrast': 3, 'levels_in_black': 2, 'levels_in_white': 253})
             self.panel.adjustment_changed.emit(self.panel.get_adjustments())

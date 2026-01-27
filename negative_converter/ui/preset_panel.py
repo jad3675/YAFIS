@@ -7,7 +7,7 @@ from PyQt6.QtGui import QIcon
 import json # Added for dummy presets in main
 import numpy as np # Added for dummy image in main
 
-from negative_converter.utils.logger import get_logger
+from ..utils.logger import get_logger
 
 # Assuming FilmPresetManager is in the processing package
 # Adjust the import path based on your final project structure
@@ -362,30 +362,32 @@ if __name__ == '__main__':
 
         def get_current_image_for_processing(self):
             # Method the panel calls to get the image
-            print("Main window: Providing current image for processing.")
+            logger.debug("DummyMainWindow: Providing current image for processing.")
             return self.image.copy() # Return a copy of the *original* image
 
         # Updated handle_preview signature
         def handle_preview(self, image, preset_type, preset_id, intensity, grain_scale):
-            print("-" * 20)
             if preset_id is None:
-                print("Main window: PREVIEW request for original image.")
+                logger.debug("DummyMainWindow: PREVIEW request for original image.")
                 self.preview_image = image.copy() # Show original
             elif preset_type == 'film':
                 # A preset IS selected, proceed with simulation
-                print(f"Main window: PREVIEW request for preset '{preset_id}', intensity {intensity:.2f}, grain {grain_scale:.1f}x")
+                logger.debug("DummyMainWindow: PREVIEW request for preset '%s', intensity %.2f, grain %.1fx", 
+                             preset_id, intensity, grain_scale)
                 try:
                     # Get modified params based on UI
                     modified_params = self.preset_panel.get_modified_preset_params(preset_id, grain_scale)
                     if modified_params:
                         preset_dict = {"parameters": modified_params} # Create temp dict for apply_preset
                         self.preview_image = self.preset_mgr.apply_preset(image, preset_dict, intensity)
-                        print(f"Main window: Preview simulation successful.")
-                    else: print(f"Main window: Could not get modified preset parameters for preview.")
-                except Exception as e: print(f"Main window: Error during preview simulation: {e}")
+                        logger.debug("DummyMainWindow: Preview simulation successful.")
+                    else:
+                        logger.warning("DummyMainWindow: Could not get modified preset parameters for preview.")
+                except Exception as e:
+                    logger.error("DummyMainWindow: Error during preview simulation: %s", e)
             else:
-                 print(f"Main window: Received unknown preset type '{preset_type}' in preview handler.")
-                 self.preview_image = image.copy() # Fallback
+                logger.warning("DummyMainWindow: Received unknown preset type '%s' in preview handler.", preset_type)
+                self.preview_image = image.copy() # Fallback
 
             # Display the preview (simple OpenCV window for testing)
             cv2.imshow("Preview", cv2.cvtColor(self.preview_image, cv2.COLOR_RGB2BGR))
@@ -394,24 +396,26 @@ if __name__ == '__main__':
 
         # Updated handle_apply signature
         def handle_apply(self, image, preset_type, preset_id, intensity, grain_scale):
-            print("-" * 20)
             if preset_id is None:
-                 print("Main window: APPLY request ignored (no preset selected).")
-                 return # Cannot apply 'None'
+                logger.warning("DummyMainWindow: APPLY request ignored (no preset selected).")
+                return # Cannot apply 'None'
 
             if preset_type == 'film':
-                print(f"Main window: APPLY request for preset '{preset_id}', intensity {intensity:.2f}, grain {grain_scale:.1f}x")
+                logger.info("DummyMainWindow: APPLY request for preset '%s', intensity %.2f, grain %.1fx", 
+                            preset_id, intensity, grain_scale)
                 try:
                     modified_params = self.preset_panel.get_modified_preset_params(preset_id, grain_scale)
                     if modified_params:
                         preset_dict = {"parameters": modified_params}
                         applied_img = self.preset_mgr.apply_preset(image, preset_dict, intensity)
-                        print(f"Main window: Apply simulation successful. Updating main image.")
+                        logger.info("DummyMainWindow: Apply simulation successful. Updating main image.")
                         self.image = applied_img # Update the main image permanently
-                    else: print("Main window: Could not get modified preset parameters for apply.")
-                except Exception as e: print(f"Main window: Error during apply simulation: {e}")
+                    else:
+                        logger.warning("DummyMainWindow: Could not get modified preset parameters for apply.")
+                except Exception as e:
+                    logger.error("DummyMainWindow: Error during apply simulation: %s", e)
             else:
-                 print(f"Main window: Received unknown preset type '{preset_type}' in apply handler.")
+                logger.warning("DummyMainWindow: Received unknown preset type '%s' in apply handler.", preset_type)
 
 
             # Update UI to show the new permanent image (just update preview window here)
@@ -429,11 +433,11 @@ if __name__ == '__main__':
     # Clean up dummy presets
     import shutil
     try:
-        shutil.rmtree(dummy_film_preset_dir)
+        shutil.rmtree(dummy_preset_dir)
         # Removed photo preset file cleanup
-        print("\nCleaned up temporary preset files.")
+        logger.info("Cleaned up temporary preset files.")
     except Exception as e:
-        print(f"\nCould not remove temp preset files: {e}")
+        logger.error("Could not remove temp preset files: %s", e)
 
     cv2.destroyAllWindows() # Close OpenCV window
     sys.exit(exit_code)
