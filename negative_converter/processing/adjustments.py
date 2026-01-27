@@ -3,9 +3,9 @@ import numpy as np
 import cv2
 import cv2.xphoto as xphoto  # Import the extended photo module
 
-from negative_converter.utils.gpu import GPU_ENABLED, xp, cp_module as cp
-from negative_converter.utils.logger import get_logger
-from negative_converter.utils.imaging import apply_curve
+from ..utils.gpu import GPU_ENABLED, xp, cp_module as cp, is_cupy_backend
+from ..utils.logger import get_logger
+from ..utils.imaging import apply_curve
 
 logger = get_logger(__name__)
 
@@ -53,20 +53,21 @@ class ImageAdjustments:
         if image is None or image.size == 0: return image
         if value == 0: return image.copy()
         brightness_offset = (value / 100.0) * 127.0
-        if GPU_ENABLED:
-            xp = cp; img_arr = xp.asarray(image, dtype=xp.float32)
+        use_gpu = is_cupy_backend()
+        if use_gpu:
+            arr_mod = cp; img_arr = arr_mod.asarray(image, dtype=arr_mod.float32)
         else:
-            xp = np; img_arr = image.astype(xp.float32)
+            arr_mod = np; img_arr = image.astype(arr_mod.float32)
         try:
             result_arr = img_arr + brightness_offset
-            result_arr = xp.clip(result_arr, 0, 255)
-            return xp.asnumpy(result_arr).astype(np.uint8) if GPU_ENABLED else result_arr.astype(np.uint8)
+            result_arr = arr_mod.clip(result_arr, 0, 255)
+            return arr_mod.asnumpy(result_arr).astype(np.uint8) if use_gpu else result_arr.astype(np.uint8)
         except Exception:
             logger.exception(
                 "Brightness failed (%s). Falling back to CPU.",
-                "GPU" if GPU_ENABLED else "CPU",
+                "GPU" if use_gpu else "CPU",
             )
-            if GPU_ENABLED:
+            if use_gpu:
                 img_arr_cpu = image.astype(np.float32)
                 result_arr_cpu = img_arr_cpu + brightness_offset
                 return np.clip(result_arr_cpu, 0, 255).astype(np.uint8)
@@ -79,20 +80,21 @@ class ImageAdjustments:
         if value == 0: return image.copy()
         factor = (259.0 * (value + 255.0)) / (255.0 * (259.0 - value)) if value != 259 else 259.0
         mean_gray = 128.0
-        if GPU_ENABLED:
-            xp = cp; img_arr = xp.asarray(image, dtype=xp.float32)
+        use_gpu = is_cupy_backend()
+        if use_gpu:
+            arr_mod = cp; img_arr = arr_mod.asarray(image, dtype=arr_mod.float32)
         else:
-            xp = np; img_arr = image.astype(xp.float32)
+            arr_mod = np; img_arr = image.astype(arr_mod.float32)
         try:
             result_arr = factor * (img_arr - mean_gray) + mean_gray
-            result_arr = xp.clip(result_arr, 0, 255)
-            return xp.asnumpy(result_arr).astype(np.uint8) if GPU_ENABLED else result_arr.astype(np.uint8)
+            result_arr = arr_mod.clip(result_arr, 0, 255)
+            return arr_mod.asnumpy(result_arr).astype(np.uint8) if use_gpu else result_arr.astype(np.uint8)
         except Exception:
             logger.exception(
                 "Contrast failed (%s). Falling back to CPU.",
-                "GPU" if GPU_ENABLED else "CPU",
+                "GPU" if use_gpu else "CPU",
             )
-            if GPU_ENABLED:
+            if use_gpu:
                 img_arr_cpu = image.astype(np.float32)
                 result_arr_cpu = factor * (img_arr_cpu - mean_gray) + mean_gray
                 return np.clip(result_arr_cpu, 0, 255).astype(np.uint8)
@@ -120,21 +122,22 @@ class ImageAdjustments:
         """Adjust image color temperature and tint (GPU/CPU)"""
         if image is None or image.size == 0 or (temp == 0 and tint == 0): return image.copy()
         temp_factor = temp * 0.3; tint_factor = tint * 0.3
-        if GPU_ENABLED: xp = cp; img_arr = xp.asarray(image, dtype=xp.float32)
-        else: xp = np; img_arr = image.astype(xp.float32)
+        use_gpu = is_cupy_backend()
+        if use_gpu: arr_mod = cp; img_arr = arr_mod.asarray(image, dtype=arr_mod.float32)
+        else: arr_mod = np; img_arr = image.astype(arr_mod.float32)
         try:
             result_arr = img_arr.copy()
             result_arr[..., 0] += temp_factor
             result_arr[..., 2] -= temp_factor
             result_arr[..., 1] -= tint_factor
-            result_arr = xp.clip(result_arr, 0, 255)
-            return xp.asnumpy(result_arr).astype(np.uint8) if GPU_ENABLED else result_arr.astype(np.uint8)
+            result_arr = arr_mod.clip(result_arr, 0, 255)
+            return arr_mod.asnumpy(result_arr).astype(np.uint8) if use_gpu else result_arr.astype(np.uint8)
         except Exception:
             logger.exception(
                 "Temp/Tint failed (%s). Falling back to CPU.",
-                "GPU" if GPU_ENABLED else "CPU",
+                "GPU" if use_gpu else "CPU",
             )
-            if GPU_ENABLED:
+            if use_gpu:
                 img_arr_cpu = image.astype(np.float32)
                 result_arr_cpu = img_arr_cpu.copy()
                 result_arr_cpu[..., 0] += temp_factor
@@ -184,7 +187,7 @@ class AdvancedAdjustments:
         # Check for CuPy *after* ensuring uint8
         if "cupy" in str(type(result)):
             logger.warning("apply_curves expects NumPy input. Converting.")
-            if GPU_ENABLED and cp is not None:
+            if is_cupy_backend() and cp is not None:
                 result = cp.asnumpy(result)
             else:
                 raise TypeError("Cannot convert non-GPU array using cp.asnumpy")
@@ -265,26 +268,26 @@ class AdvancedAdjustments:
         """Adjust color balance using CMY/RGB opposites (additive) (GPU/CPU)"""
         if image is None or image.size == 0 or (cyan_red == 0 and magenta_green == 0 and yellow_blue == 0): return image.copy()
         red_adj=(cyan_red/100.0)*127.0; green_adj=(magenta_green/100.0)*127.0; blue_adj=(yellow_blue/100.0)*127.0
-        if GPU_ENABLED: xp = cp; img_arr = xp.asarray(image, dtype=xp.float32)
-        else: xp = np; img_arr = image.astype(xp.float32)
+        use_gpu = is_cupy_backend()
+        if use_gpu: arr_mod = cp; img_arr = arr_mod.asarray(image, dtype=arr_mod.float32)
+        else: arr_mod = np; img_arr = image.astype(arr_mod.float32)
         try:
             result_arr = img_arr.copy()
             result_arr[..., 0] += red_adj; result_arr[..., 1] -= green_adj; result_arr[..., 2] -= blue_adj
-            result_arr = xp.clip(result_arr, 0, 255)
-            return xp.asnumpy(result_arr).astype(np.uint8) if GPU_ENABLED else result_arr.astype(np.uint8)
+            result_arr = arr_mod.clip(result_arr, 0, 255)
+            return arr_mod.asnumpy(result_arr).astype(np.uint8) if use_gpu else result_arr.astype(np.uint8)
         except Exception:
             logger.exception(
                 "Additive Color Balance failed (%s). Falling back.",
-                "GPU" if GPU_ENABLED else "CPU",
+                "GPU" if use_gpu else "CPU",
             )
-            if GPU_ENABLED:
-                xp = np
-                img_arr = image.astype(xp.float32)
+            if use_gpu:
+                img_arr = image.astype(np.float32)
                 result_arr = img_arr.copy()
                 result_arr[..., 0] += red_adj
                 result_arr[..., 1] -= green_adj
                 result_arr[..., 2] -= blue_adj
-                return xp.clip(result_arr, 0, 255).astype(np.uint8)
+                return np.clip(result_arr, 0, 255).astype(np.uint8)
             return image.copy()
 
     @staticmethod
@@ -293,26 +296,26 @@ class AdvancedAdjustments:
         if image is None or image.size == 0: return image
         is_identity = (red_shift == 0 and green_shift == 0 and blue_shift == 0 and red_balance == 1.0 and green_balance == 1.0 and blue_balance == 1.0)
         if is_identity: return image.copy()
-        if GPU_ENABLED: xp = cp; img_arr = xp.asarray(image, dtype=xp.float32)
-        else: xp = np; img_arr = image.astype(xp.float32)
+        use_gpu = is_cupy_backend()
+        if use_gpu: arr_mod = cp; img_arr = arr_mod.asarray(image, dtype=arr_mod.float32)
+        else: arr_mod = np; img_arr = image.astype(arr_mod.float32)
         try:
             result_arr = img_arr.copy()
-            if red_shift!=0 or green_shift!=0 or blue_shift!=0: result_arr += xp.array([red_shift, green_shift, blue_shift], dtype=xp.float32)
-            if red_balance!=1.0 or green_balance!=1.0 or blue_balance!=1.0: result_arr *= xp.array([red_balance, green_balance, blue_balance], dtype=xp.float32)
-            result_arr = xp.clip(result_arr, 0, 255)
-            return xp.asnumpy(result_arr).astype(np.uint8) if GPU_ENABLED else result_arr.astype(np.uint8)
+            if red_shift!=0 or green_shift!=0 or blue_shift!=0: result_arr += arr_mod.array([red_shift, green_shift, blue_shift], dtype=arr_mod.float32)
+            if red_balance!=1.0 or green_balance!=1.0 or blue_balance!=1.0: result_arr *= arr_mod.array([red_balance, green_balance, blue_balance], dtype=arr_mod.float32)
+            result_arr = arr_mod.clip(result_arr, 0, 255)
+            return arr_mod.asnumpy(result_arr).astype(np.uint8) if use_gpu else result_arr.astype(np.uint8)
         except Exception:
             logger.exception(
                 "Color Balance failed (%s). Falling back.",
-                "GPU" if GPU_ENABLED else "CPU",
+                "GPU" if use_gpu else "CPU",
             )
-            if GPU_ENABLED:
-                xp = np
-                img_arr = image.astype(xp.float32)
+            if use_gpu:
+                img_arr = image.astype(np.float32)
                 result_arr = img_arr.copy()
-                result_arr += xp.array([red_shift, green_shift, blue_shift])
-                result_arr *= xp.array([red_balance, green_balance, blue_balance])
-                return xp.clip(result_arr, 0, 255).astype(np.uint8)
+                result_arr += np.array([red_shift, green_shift, blue_shift])
+                result_arr *= np.array([red_balance, green_balance, blue_balance])
+                return np.clip(result_arr, 0, 255).astype(np.uint8)
             return image.copy()
 
     @staticmethod
@@ -326,58 +329,103 @@ class AdvancedAdjustments:
               (out_idx==2 and r_mix==0 and g_mix==0 and b_mix==100 and constant==0)
         if is_id: return image.copy()
         r_f=r_mix/100.0; g_f=g_mix/100.0; b_f=b_mix/100.0; const_v=(constant/100.0)*127.5
-        if GPU_ENABLED: xp = cp; img_arr = xp.asarray(image, dtype=xp.float32)
-        else: xp = np; img_arr = image.astype(xp.float32)
+        use_gpu = is_cupy_backend()
+        if use_gpu: arr_mod = cp; img_arr = arr_mod.asarray(image, dtype=arr_mod.float32)
+        else: arr_mod = np; img_arr = image.astype(arr_mod.float32)
         try:
             r_in,g_in,b_in=img_arr[...,0],img_arr[...,1],img_arr[...,2]
             new_ch=(r_in*r_f+g_in*g_f+b_in*b_f+const_v)
             result_arr=img_arr.copy(); result_arr[...,out_idx]=new_ch
-            result_arr=xp.clip(result_arr,0,255)
-            return xp.asnumpy(result_arr).astype(np.uint8) if GPU_ENABLED else result_arr.astype(np.uint8)
+            result_arr=arr_mod.clip(result_arr,0,255)
+            return arr_mod.asnumpy(result_arr).astype(np.uint8) if use_gpu else result_arr.astype(np.uint8)
         except Exception:
             logger.exception(
                 "Channel Mixer failed (%s). Falling back.",
-                "GPU" if GPU_ENABLED else "CPU",
+                "GPU" if use_gpu else "CPU",
             )
-            if GPU_ENABLED:
-                xp = np
-                img_arr = image.astype(xp.float32)
+            if use_gpu:
+                img_arr = image.astype(np.float32)
                 r_in, g_in, b_in = img_arr[..., 0], img_arr[..., 1], img_arr[..., 2]
                 new_ch = (r_in * r_f + g_in * g_f + b_in * b_f + const_v)
                 result_arr = img_arr.copy()
                 result_arr[..., out_idx] = new_ch
-                return xp.clip(result_arr, 0, 255).astype(np.uint8)
+                return np.clip(result_arr, 0, 255).astype(np.uint8)
             return image.copy()
 
     @staticmethod
-    def apply_noise_reduction(image, strength=10, template_window=7, search_window=21):
-        """Applies Non-local Means Denoising for color images."""
-        if image is None or image.size == 0 or strength <= 0: return image.copy()
-
-        # Check if xphoto module is available
-        if not hasattr(cv2, "xphoto") or not hasattr(cv2.xphoto, "createSimpleWB"):
-            logger.warning(
-                "Noise Reduction requires 'opencv-contrib-python'. Skipping noise reduction."
-            )
+    def apply_noise_reduction(image, strength=10, template_window=7, search_window=21, fast_mode=True):
+        """
+        Applies noise reduction to color images.
+        
+        Args:
+            image: Input RGB uint8 image
+            strength: Denoising strength (1-100)
+            template_window: Template window size for NLM (odd number)
+            search_window: Search window size for NLM (odd number)
+            fast_mode: If True, uses faster bilateral filter instead of NLM
+            
+        Note: Non-local Means (NLM) provides better quality but is very slow.
+              Bilateral filter is much faster with good results for most cases.
+        """
+        if image is None or image.size == 0 or strength <= 0: 
             return image.copy()
 
-        # Ensure window sizes are odd and valid
-        if template_window % 2 == 0: template_window += 1
-        if search_window % 2 == 0: search_window += 1
-        template_window = max(3, template_window)
-        search_window = max(template_window, search_window) # Search window must be >= template window
-
         try:
-            # Convert to BGR as fastNlMeansDenoisingColored often expects BGR
-            img_bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-            # Apply denoising
-            denoised_bgr = cv2.fastNlMeansDenoisingColored(img_bgr, None, h=float(strength), hColor=float(strength), templateWindowSize=template_window, searchWindowSize=search_window)
-            # Convert back to RGB
-            return cv2.cvtColor(denoised_bgr, cv2.COLOR_BGR2RGB)
+            if fast_mode:
+                # Fast mode: Use bilateral filter (much faster, good quality)
+                # Map strength (1-100) to bilateral filter parameters
+                # d: diameter of pixel neighborhood (higher = slower but better)
+                # sigmaColor: filter sigma in color space
+                # sigmaSpace: filter sigma in coordinate space
+                d = min(9, max(3, int(strength / 10)))  # 3-9 based on strength
+                sigma_color = strength * 2  # 2-200
+                sigma_space = strength * 2  # 2-200
+                
+                img_bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+                denoised_bgr = cv2.bilateralFilter(img_bgr, d, sigma_color, sigma_space)
+                return cv2.cvtColor(denoised_bgr, cv2.COLOR_BGR2RGB)
+            else:
+                # Quality mode: Use Non-local Means (slow but high quality)
+                # For large images, process at reduced resolution
+                h, w = image.shape[:2]
+                max_pixels = 2_000_000  # 2 MP threshold
+                
+                if h * w > max_pixels:
+                    # Downscale for processing
+                    scale = np.sqrt(max_pixels / (h * w))
+                    new_h, new_w = int(h * scale), int(w * scale)
+                    img_small = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+                    
+                    img_bgr = cv2.cvtColor(img_small, cv2.COLOR_RGB2BGR)
+                    denoised_bgr = cv2.fastNlMeansDenoisingColored(
+                        img_bgr, None, 
+                        h=float(strength), hColor=float(strength),
+                        templateWindowSize=template_window, 
+                        searchWindowSize=search_window
+                    )
+                    denoised_rgb = cv2.cvtColor(denoised_bgr, cv2.COLOR_BGR2RGB)
+                    
+                    # Upscale back
+                    return cv2.resize(denoised_rgb, (w, h), interpolation=cv2.INTER_LANCZOS4)
+                else:
+                    # Process at full resolution
+                    # Ensure window sizes are odd and valid
+                    if template_window % 2 == 0: template_window += 1
+                    if search_window % 2 == 0: search_window += 1
+                    template_window = max(3, template_window)
+                    search_window = max(template_window, search_window)
+                    
+                    img_bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+                    denoised_bgr = cv2.fastNlMeansDenoisingColored(
+                        img_bgr, None, 
+                        h=float(strength), hColor=float(strength),
+                        templateWindowSize=template_window, 
+                        searchWindowSize=search_window
+                    )
+                    return cv2.cvtColor(denoised_bgr, cv2.COLOR_BGR2RGB)
+                    
         except cv2.error:
-            logger.exception(
-                "Noise Reduction (fastNlMeansDenoisingColored) failed. Is 'opencv-contrib-python' installed correctly?"
-            )
+            logger.exception("Noise Reduction failed.")
             return image.copy()
         except Exception:
             logger.exception("Noise Reduction unexpected error.")
@@ -1474,12 +1522,48 @@ def set_photo_preset_manager(manager):
     _photo_preset_manager = manager
 
 
+def _curve_points_to_lut(curve_points):
+    """
+    Convert curve control points to a 256-element LUT for GPU processing.
+    
+    Args:
+        curve_points: List of (x, y) tuples where x,y are in 0-255 range
+        
+    Returns:
+        numpy array of 256 float32 values representing the curve LUT
+    """
+    if not curve_points or len(curve_points) < 2:
+        # Identity curve
+        return np.arange(256, dtype=np.float32)
+    
+    # Sort points by x coordinate
+    points = sorted(curve_points, key=lambda p: p[0])
+    
+    # Extract x and y coordinates
+    x_points = np.array([p[0] for p in points], dtype=np.float32)
+    y_points = np.array([p[1] for p in points], dtype=np.float32)
+    
+    # Ensure we have endpoints
+    if x_points[0] > 0:
+        x_points = np.insert(x_points, 0, 0)
+        y_points = np.insert(y_points, 0, 0)
+    if x_points[-1] < 255:
+        x_points = np.append(x_points, 255)
+        y_points = np.append(y_points, 255)
+    
+    # Interpolate to create 256-element LUT
+    lut = np.interp(np.arange(256), x_points, y_points)
+    return np.clip(lut, 0, 255).astype(np.float32)
+
+
 def apply_all_adjustments(image, adjustments_dict):
     """
     Applies a dictionary of adjustments to an image in a specific order.
     Handles both basic adjustments and advanced ones like curves, mixer, HSL, etc.
     Also handles preset previews if 'preset_info' is in the dictionary.
     Expects image as uint8 NumPy array (RGB). Returns uint8 NumPy array (RGB).
+    
+    Uses GPU acceleration when available for most adjustments.
     """
     if image is None:
         logger.error("apply_all_adjustments received None image.")
@@ -1503,27 +1587,198 @@ def apply_all_adjustments(image, adjustments_dict):
             return False
         return True
 
-    # --- Apply Adjustments in Order ---
-
-    # 1. Basic Adjustments (Brightness, Contrast, Saturation, Hue)
-    logger.debug("Pipeline Step: Basic Adjustments...")
+    # --- Gather all adjustment parameters ---
     brightness = adjustments_dict.get('brightness', 0)
     contrast = adjustments_dict.get('contrast', 0)
     saturation = adjustments_dict.get('saturation', 0)
     hue = adjustments_dict.get('hue', 0)
-    current_image = basic_adjuster.adjust_brightness(current_image, brightness)
-    current_image = basic_adjuster.adjust_contrast(current_image, contrast)
-    current_image = basic_adjuster.adjust_saturation(current_image, saturation)
-    current_image = basic_adjuster.adjust_hue(current_image, hue)
-    if not check_img("Basic Adjustments"): return None
-    logger.debug("Pipeline Step: Basic Adjustments Done.")
-
-    # 2. White Balance (Temp/Tint)
     temp = adjustments_dict.get('temp', 0)
     tint = adjustments_dict.get('tint', 0)
-    logger.debug("Pipeline Step: White Balance (Temp/Tint)...")
-    current_image = basic_adjuster.adjust_temp_tint(current_image, temp, tint)
-    if not check_img("Temp/Tint"): return None
+    shadows = adjustments_dict.get('shadows', 0)
+    highlights = adjustments_dict.get('highlights', 0)
+    vibrance = adjustments_dict.get('vibrance', 0)
+    
+    # Levels parameters
+    levels_in_black = adjustments_dict.get('levels_in_black', 0)
+    levels_in_white = adjustments_dict.get('levels_in_white', 255)
+    levels_gamma = adjustments_dict.get('levels_gamma', 1.0)
+    levels_out_black = adjustments_dict.get('levels_out_black', 0)
+    levels_out_white = adjustments_dict.get('levels_out_white', 255)
+    
+    # Check what adjustments we have
+    has_basic_adjustments = any([
+        brightness != 0, contrast != 0, saturation != 0, hue != 0,
+        temp != 0, tint != 0, shadows != 0, highlights != 0, vibrance != 0
+    ])
+    has_levels = (levels_in_black != 0 or levels_in_white != 255 or 
+                  levels_gamma != 1.0 or levels_out_black != 0 or levels_out_white != 255)
+    
+    # Build channel mixer config
+    channel_mixer = None
+    mixer_identity = True
+    for out_ch_name in ['red', 'green', 'blue']:
+        r_mix = adjustments_dict.get(f'mixer_{out_ch_name}_r', 100 if out_ch_name == 'red' else 0)
+        g_mix = adjustments_dict.get(f'mixer_{out_ch_name}_g', 100 if out_ch_name == 'green' else 0)
+        b_mix = adjustments_dict.get(f'mixer_{out_ch_name}_b', 100 if out_ch_name == 'blue' else 0)
+        const = adjustments_dict.get(f'mixer_{out_ch_name}_const', 0)
+        
+        is_id = ((out_ch_name == 'red' and r_mix == 100 and g_mix == 0 and b_mix == 0 and const == 0) or
+                 (out_ch_name == 'green' and r_mix == 0 and g_mix == 100 and b_mix == 0 and const == 0) or
+                 (out_ch_name == 'blue' and r_mix == 0 and g_mix == 0 and b_mix == 100 and const == 0))
+        
+        if not is_id:
+            mixer_identity = False
+            if channel_mixer is None:
+                channel_mixer = {}
+            channel_mixer[out_ch_name] = {'r': r_mix, 'g': g_mix, 'b': b_mix, 'constant': const}
+    
+    # Build HSL config
+    hsl_config = None
+    for color_range in ['reds', 'yellows', 'greens', 'cyans', 'blues', 'magentas']:
+        h_shift = adjustments_dict.get(f'hsl_{color_range}_h', 0)
+        s_shift = adjustments_dict.get(f'hsl_{color_range}_s', 0)
+        l_shift = adjustments_dict.get(f'hsl_{color_range}_l', 0)
+        if h_shift != 0 or s_shift != 0 or l_shift != 0:
+            if hsl_config is None:
+                hsl_config = {}
+            hsl_config[color_range] = {'h': h_shift, 's': s_shift, 'l': l_shift}
+    
+    # Build curves config (convert curve points to LUTs)
+    curves_config = None
+    curves_red = adjustments_dict.get('curves_red')
+    curves_green = adjustments_dict.get('curves_green')
+    curves_blue = adjustments_dict.get('curves_blue')
+    curves_rgb = adjustments_dict.get('curves_rgb')
+    
+    if curves_red or curves_green or curves_blue or curves_rgb:
+        curves_config = {}
+        if curves_rgb:
+            curves_config['rgb'] = _curve_points_to_lut(curves_rgb)
+        if curves_red:
+            curves_config['r'] = _curve_points_to_lut(curves_red)
+        if curves_green:
+            curves_config['g'] = _curve_points_to_lut(curves_green)
+        if curves_blue:
+            curves_config['b'] = _curve_points_to_lut(curves_blue)
+    
+    # Build selective color config
+    selective_color_config = None
+    selective_color_relative = adjustments_dict.get('sel_relative', True)
+    for color_range in ['reds', 'yellows', 'greens', 'cyans', 'blues', 'magentas', 'whites', 'neutrals', 'blacks']:
+        c_adj = adjustments_dict.get(f'sel_{color_range}_c', 0)
+        m_adj = adjustments_dict.get(f'sel_{color_range}_m', 0)
+        y_adj = adjustments_dict.get(f'sel_{color_range}_y', 0)
+        k_adj = adjustments_dict.get(f'sel_{color_range}_k', 0)
+        if c_adj != 0 or m_adj != 0 or y_adj != 0 or k_adj != 0:
+            if selective_color_config is None:
+                selective_color_config = {}
+            selective_color_config[color_range] = {'c': c_adj, 'm': m_adj, 'y': y_adj, 'k': k_adj}
+    
+    # Build noise reduction / smoothing config
+    smoothing_config = None
+    nr_strength = adjustments_dict.get('noise_reduction_strength', 0)
+    if nr_strength > 0:
+        # Map noise reduction strength to bilateral filter parameters
+        smoothing_config = {
+            'radius': min(3, 1 + nr_strength // 30),  # 1-3 based on strength
+            'sigma_s': 10 + nr_strength * 0.5,  # Spatial sigma
+            'sigma_r': 20 + nr_strength * 0.8,  # Range sigma
+        }
+    
+    # Check if we have any GPU-acceleratable adjustments
+    has_any_adjustments = (has_basic_adjustments or has_levels or channel_mixer or 
+                           hsl_config or curves_config or selective_color_config or smoothing_config)
+    
+    # --- Try GPU acceleration for all supported operations ---
+    logger.debug("Pipeline Step: GPU-accelerated adjustments...")
+    gpu_used = False
+    
+    try:
+        from ..utils.gpu import get_gpu_engine, has_gpu_engine
+        
+        if has_gpu_engine() and has_any_adjustments:
+            engine = get_gpu_engine()
+            
+            # Build levels dict if needed
+            levels_dict = None
+            if has_levels:
+                levels_dict = {
+                    'in_black': levels_in_black,
+                    'in_white': levels_in_white,
+                    'gamma': levels_gamma,
+                    'out_black': levels_out_black,
+                    'out_white': levels_out_white,
+                }
+            
+            # Process ALL adjustments in one GPU pass
+            current_image = engine.process_adjustments(
+                current_image,
+                brightness=brightness,
+                contrast=contrast,
+                saturation=saturation,
+                temp=temp,
+                tint=tint,
+                shadows=shadows,
+                highlights=highlights,
+                vibrance=vibrance,
+                hue=hue,
+                levels=levels_dict,
+                channel_mixer=channel_mixer,
+                curves=curves_config,
+                hsl=hsl_config,
+                selective_color=selective_color_config,
+                selective_color_relative=selective_color_relative,
+                smoothing=smoothing_config,
+            )
+            gpu_used = True
+            logger.debug("All adjustments applied via GPU (single pass)")
+    except Exception as e:
+        logger.warning("GPU acceleration failed, falling back to CPU: %s", e)
+        gpu_used = False
+    
+    # CPU fallback for basic adjustments
+    if not gpu_used:
+        if brightness != 0 or contrast != 0 or saturation != 0:
+            current_image = basic_adjuster.adjust_brightness(current_image, brightness)
+            current_image = basic_adjuster.adjust_contrast(current_image, contrast)
+            current_image = basic_adjuster.adjust_saturation(current_image, saturation)
+        
+        if temp != 0 or tint != 0:
+            current_image = basic_adjuster.adjust_temp_tint(current_image, temp, tint)
+        
+        if has_levels:
+            current_image = basic_adjuster.adjust_levels(
+                current_image, levels_in_black, levels_in_white,
+                levels_gamma, levels_out_black, levels_out_white
+            )
+        
+        if shadows != 0 or highlights != 0:
+            current_image = advanced_adjuster.adjust_shadows_highlights(current_image, shadows, highlights)
+        
+        if vibrance != 0:
+            current_image = advanced_adjuster.adjust_vibrance(current_image, vibrance)
+        
+        if hue != 0:
+            current_image = basic_adjuster.adjust_hue(current_image, hue)
+        
+        # Channel Mixer (CPU fallback)
+        if channel_mixer:
+            for out_ch_name, cfg in channel_mixer.items():
+                current_image = advanced_adjuster.adjust_channel_mixer(
+                    current_image, out_ch_name.capitalize(),
+                    cfg.get('r', 0), cfg.get('g', 0), cfg.get('b', 0), cfg.get('constant', 0)
+                )
+        
+        # HSL (CPU fallback)
+        if hsl_config:
+            for color_range, adj in hsl_config.items():
+                current_image = advanced_adjuster.adjust_hsl_by_range(
+                    current_image, color_range.capitalize(),
+                    adj.get('h', 0), adj.get('s', 0), adj.get('l', 0)
+                )
+    
+    if not check_img("Basic Adjustments"): return None
+    logger.debug("Pipeline Step: Basic Adjustments Done.")
 
     # --- Apply Preset (if specified for preview) ---
     preset_info = adjustments_dict.get('preset_info')
@@ -1549,8 +1804,10 @@ def apply_all_adjustments(image, adjustments_dict):
                 # We need the preset definition to apply grain correctly if needed
                 preset_data = _film_preset_manager.get_preset(preset_id)
                 if preset_data:
-                     # Note: apply_preset expects the full preset dict, not just params
-                     current_image = _film_preset_manager.apply_preset(current_image, preset_data, intensity, grain_scale)
+                     # Use preview_mode=True for faster preview at lower resolution
+                     current_image = _film_preset_manager.apply_preset(
+                         current_image, preset_data, intensity, grain_scale, preview_mode=True
+                     )
                      if not check_img(f"Film Preset: {preset_id}"): return None # Check result after applying
                 else:
                     logger.warning("Film preset '%s' not found for preview.", preset_id)
@@ -1564,40 +1821,29 @@ def apply_all_adjustments(image, adjustments_dict):
                 intensity,
             )
             try:
-                current_image = _photo_preset_manager.apply_photo_preset(current_image, preset_id, intensity)
+                # Use preview_mode=True for faster preview at lower resolution
+                current_image = _photo_preset_manager.apply_photo_preset(
+                    current_image, preset_id, intensity, preview_mode=True
+                )
                 if not check_img(f"Photo Preset: {preset_id}"):
                     return None  # Check result after applying
             except Exception:
                 logger.exception("Failed applying photo preset preview '%s'.", preset_id)
 
-    logger.debug("Pipeline Step: White Balance Done.")
+    # 4. Curves - Skip if already done via GPU
+    if not gpu_used:
+        logger.debug("Pipeline Step: Curves (CPU fallback)...")
+        current_image = advanced_adjuster.apply_curves(
+            current_image,
+            adjustments_dict.get('curves_red'),
+            adjustments_dict.get('curves_green'),
+            adjustments_dict.get('curves_blue'),
+            adjustments_dict.get('curves_rgb')
+        )
+        if not check_img("Curves"): return None
+        logger.debug("Pipeline Step: Curves Done.")
 
-    # 3. Levels
-    logger.debug("Pipeline Step: Levels...")
-    current_image = basic_adjuster.adjust_levels(
-        current_image,
-        adjustments_dict.get('levels_in_black', 0),
-        adjustments_dict.get('levels_in_white', 255),
-        adjustments_dict.get('levels_gamma', 1.0),
-        adjustments_dict.get('levels_out_black', 0),
-        adjustments_dict.get('levels_out_white', 255)
-    )
-    if not check_img("Levels"): return None
-    logger.debug("Pipeline Step: Levels Done.")
-
-    # 4. Curves
-    logger.debug("Pipeline Step: Curves...")
-    current_image = advanced_adjuster.apply_curves(
-        current_image,
-        adjustments_dict.get('curves_red'),
-        adjustments_dict.get('curves_green'),
-        adjustments_dict.get('curves_blue'),
-        adjustments_dict.get('curves_rgb')
-    )
-    if not check_img("Curves"): return None
-    logger.debug("Pipeline Step: Curves Done.")
-
-    # --- Dust Removal ---
+    # --- Dust Removal (always CPU - specialized inpainting) ---
     if adjustments_dict.get('dust_removal_enabled', False):
         logger.debug("Pipeline Step: Dust Removal...")
         current_image = AdvancedAdjustments.apply_dust_removal(
@@ -1608,55 +1854,58 @@ def apply_all_adjustments(image, adjustments_dict):
         if not check_img("Dust Removal"): return None
         logger.debug("Pipeline Step: Dust Removal Done.")
 
-    # 5. Channel Mixer (Apply per output channel)
-    logger.debug("Pipeline Step: Channel Mixer...")
-    for out_ch_name in ['Red', 'Green', 'Blue']:
-        r_mix = adjustments_dict.get(f'mixer_{out_ch_name.lower()}_r', 100 if out_ch_name == 'Red' else 0)
-        g_mix = adjustments_dict.get(f'mixer_{out_ch_name.lower()}_g', 100 if out_ch_name == 'Green' else 0)
-        b_mix = adjustments_dict.get(f'mixer_{out_ch_name.lower()}_b', 100 if out_ch_name == 'Blue' else 0)
-        const = adjustments_dict.get(f'mixer_{out_ch_name.lower()}_const', 0)
-        # Only apply if not identity transform for that channel
-        is_id = (out_ch_name == 'Red' and r_mix == 100 and g_mix == 0 and b_mix == 0 and const == 0) or \
-                (out_ch_name == 'Green' and r_mix == 0 and g_mix == 100 and b_mix == 0 and const == 0) or \
-                (out_ch_name == 'Blue' and r_mix == 0 and g_mix == 0 and b_mix == 100 and const == 0)
-        if not is_id:
-            current_image = advanced_adjuster.adjust_channel_mixer(current_image, out_ch_name, r_mix, g_mix, b_mix, const)
-            if not check_img(f"Channel Mixer ({out_ch_name})"): return None
-    logger.debug("Pipeline Step: Channel Mixer Done.")
+    # 5. Channel Mixer - Skip if already done via GPU
+    if not gpu_used:
+        logger.debug("Pipeline Step: Channel Mixer (CPU fallback)...")
+        for out_ch_name in ['Red', 'Green', 'Blue']:
+            r_mix = adjustments_dict.get(f'mixer_{out_ch_name.lower()}_r', 100 if out_ch_name == 'Red' else 0)
+            g_mix = adjustments_dict.get(f'mixer_{out_ch_name.lower()}_g', 100 if out_ch_name == 'Green' else 0)
+            b_mix = adjustments_dict.get(f'mixer_{out_ch_name.lower()}_b', 100 if out_ch_name == 'Blue' else 0)
+            const = adjustments_dict.get(f'mixer_{out_ch_name.lower()}_const', 0)
+            is_id = (out_ch_name == 'Red' and r_mix == 100 and g_mix == 0 and b_mix == 0 and const == 0) or \
+                    (out_ch_name == 'Green' and r_mix == 0 and g_mix == 100 and b_mix == 0 and const == 0) or \
+                    (out_ch_name == 'Blue' and r_mix == 0 and g_mix == 0 and b_mix == 100 and const == 0)
+            if not is_id:
+                current_image = advanced_adjuster.adjust_channel_mixer(current_image, out_ch_name, r_mix, g_mix, b_mix, const)
+                if not check_img(f"Channel Mixer ({out_ch_name})"): return None
+        logger.debug("Pipeline Step: Channel Mixer Done.")
 
-    # 6. HSL Adjustments (Apply per color range)
-    logger.debug("Pipeline Step: HSL...")
-    for color_range in ['Reds', 'Yellows', 'Greens', 'Cyans', 'Blues', 'Magentas']:
-        color_key = color_range.lower()
-        h_shift = adjustments_dict.get(f'hsl_{color_key}_h', 0)
-        s_shift = adjustments_dict.get(f'hsl_{color_key}_s', 0)
-        l_shift = adjustments_dict.get(f'hsl_{color_key}_l', 0)
-        if h_shift != 0 or s_shift != 0 or l_shift != 0:
-            current_image = advanced_adjuster.adjust_hsl_by_range(current_image, color_range, h_shift, s_shift, l_shift)
-            if not check_img(f"HSL ({color_range})"): return None
-    logger.debug("Pipeline Step: HSL Done.")
+    # 6. HSL Adjustments - Skip if already done via GPU
+    if not gpu_used:
+        logger.debug("Pipeline Step: HSL (CPU fallback)...")
+        for color_range in ['Reds', 'Yellows', 'Greens', 'Cyans', 'Blues', 'Magentas']:
+            color_key = color_range.lower()
+            h_shift = adjustments_dict.get(f'hsl_{color_key}_h', 0)
+            s_shift = adjustments_dict.get(f'hsl_{color_key}_s', 0)
+            l_shift = adjustments_dict.get(f'hsl_{color_key}_l', 0)
+            if h_shift != 0 or s_shift != 0 or l_shift != 0:
+                current_image = advanced_adjuster.adjust_hsl_by_range(current_image, color_range, h_shift, s_shift, l_shift)
+                if not check_img(f"HSL ({color_range})"): return None
+        logger.debug("Pipeline Step: HSL Done.")
 
-    # 7. Selective Color (Apply per color range)
-    logger.debug("Pipeline Step: Selective Color...")
-    relative_mode = adjustments_dict.get('sel_relative', True)
-    for color_range in ['Reds', 'Yellows', 'Greens', 'Cyans', 'Blues', 'Magentas', 'Whites', 'Neutrals', 'Blacks']:
-         color_key = color_range.lower()
-         c_adj = adjustments_dict.get(f'sel_{color_key}_c', 0)
-         m_adj = adjustments_dict.get(f'sel_{color_key}_m', 0)
-         y_adj = adjustments_dict.get(f'sel_{color_key}_y', 0)
-         k_adj = adjustments_dict.get(f'sel_{color_key}_k', 0)
-         if c_adj != 0 or m_adj != 0 or y_adj != 0 or k_adj != 0:
-             current_image = advanced_adjuster.adjust_selective_color(current_image, color_range, c_adj, m_adj, y_adj, k_adj, relative_mode)
-             if not check_img(f"Selective Color ({color_range})"): return None
-    logger.debug("Pipeline Step: Selective Color Done.")
+    # 7. Selective Color - Skip if already done via GPU
+    if not gpu_used:
+        logger.debug("Pipeline Step: Selective Color (CPU fallback)...")
+        relative_mode = adjustments_dict.get('sel_relative', True)
+        for color_range in ['Reds', 'Yellows', 'Greens', 'Cyans', 'Blues', 'Magentas', 'Whites', 'Neutrals', 'Blacks']:
+             color_key = color_range.lower()
+             c_adj = adjustments_dict.get(f'sel_{color_key}_c', 0)
+             m_adj = adjustments_dict.get(f'sel_{color_key}_m', 0)
+             y_adj = adjustments_dict.get(f'sel_{color_key}_y', 0)
+             k_adj = adjustments_dict.get(f'sel_{color_key}_k', 0)
+             if c_adj != 0 or m_adj != 0 or y_adj != 0 or k_adj != 0:
+                 current_image = advanced_adjuster.adjust_selective_color(current_image, color_range, c_adj, m_adj, y_adj, k_adj, relative_mode)
+                 if not check_img(f"Selective Color ({color_range})"): return None
+        logger.debug("Pipeline Step: Selective Color Done.")
 
-    # 8. Noise Reduction
-    nr_strength = adjustments_dict.get('noise_reduction_strength', 0)
-    if nr_strength > 0:
-        logger.debug("Pipeline Step: Noise Reduction...")
-        current_image = advanced_adjuster.apply_noise_reduction(current_image, strength=nr_strength)
-        if not check_img("Noise Reduction"): return None
-        logger.debug("Pipeline Step: Noise Reduction Done.")
+    # 8. Noise Reduction - Skip if already done via GPU
+    if not gpu_used:
+        nr_strength = adjustments_dict.get('noise_reduction_strength', 0)
+        if nr_strength > 0:
+            logger.debug("Pipeline Step: Noise Reduction (CPU fallback)...")
+            current_image = advanced_adjuster.apply_noise_reduction(current_image, strength=nr_strength)
+            if not check_img("Noise Reduction"): return None
+            logger.debug("Pipeline Step: Noise Reduction Done.")
 
     # Add other adjustments here in the desired order...
     # e.g., Vignette, Grain (Grain might be better applied last or handled by preset logic)

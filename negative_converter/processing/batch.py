@@ -4,7 +4,7 @@ import cv2
 import concurrent.futures
 import numpy as np  # Needed for potential errors during processing
 
-from negative_converter.utils.logger import get_logger
+from ..utils.logger import get_logger
 
 logger = get_logger(__name__)
 

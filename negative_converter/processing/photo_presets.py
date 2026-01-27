@@ -7,7 +7,7 @@ import cv2
 import concurrent.futures
 import math
 
-from negative_converter.utils.logger import get_logger
+from ..utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -176,11 +176,25 @@ class PhotoPresetManager:
 
         return self._save_presets_to_file()
 
-    def apply_photo_preset(self, image, preset_id, intensity=1.0):
+    def apply_photo_preset(self, image, preset_id, intensity=1.0, preview_mode=False):
         """Applies a loaded photo preset to an image sequentially (no tiling)."""
         if image is None or image.size == 0:
             logger.warning("Cannot apply preset to empty image.")
             return image
+
+        # For preview mode, process at lower resolution
+        original_size = None
+        if preview_mode:
+            h, w = image.shape[:2]
+            # Target ~1MP for preview (roughly 1000x1000)
+            max_preview_pixels = 1_000_000
+            current_pixels = h * w
+            if current_pixels > max_preview_pixels:
+                scale = np.sqrt(max_preview_pixels / current_pixels)
+                new_h, new_w = int(h * scale), int(w * scale)
+                original_size = (w, h)  # Store for upscaling later
+                image = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+                logger.debug(f"Preview mode: downscaled from {w}x{h} to {new_w}x{new_h}")
 
         preset_data = self.get_preset(preset_id)
         if not preset_data:
@@ -194,14 +208,18 @@ class PhotoPresetManager:
 
         params = validated["parameters"]
 
-        logger.debug("Applying photo preset '%s' sequentially...", preset_id)
+        logger.debug("Applying photo preset '%s' %s...", preset_id, "(preview)" if preview_mode else "sequentially")
         try:
             processed_image = self._apply_full_photo_preset(image, params)
             if processed_image is None:
                 logger.error("_apply_full_photo_preset returned None for '%s'.", preset_id)
+                if original_size:
+                    return cv2.resize(image, original_size, interpolation=cv2.INTER_LINEAR)
                 return image.copy()
         except Exception:
             logger.exception("Error applying photo preset '%s'.", preset_id)
+            if original_size:
+                return cv2.resize(image, original_size, interpolation=cv2.INTER_LINEAR)
             return image.copy()
 
         # Blend with original based on intensity
@@ -211,9 +229,16 @@ class PhotoPresetManager:
             blended = cv2.addWeighted(
                 original_image_float, 1.0 - intensity, processed_image_float, intensity, 0
             )
-            return np.clip(blended, 0, 255).astype(np.uint8)
-
-        return processed_image
+            result = np.clip(blended, 0, 255).astype(np.uint8)
+        else:
+            result = processed_image
+        
+        # Upscale back to original size if preview mode
+        if original_size:
+            result = cv2.resize(result, original_size, interpolation=cv2.INTER_LINEAR)
+            logger.debug(f"Preview mode: upscaled back to {original_size[0]}x{original_size[1]}")
+        
+        return result
 
     def _apply_full_photo_preset(self, image, params):
         # Import moved here to break circular dependency

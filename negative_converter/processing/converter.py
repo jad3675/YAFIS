@@ -2,7 +2,7 @@
 import numpy as np
 import cv2
 # Import GPU utility which handles detection and provides xp (array module)
-from negative_converter.utils.gpu import GPU_ENABLED, xp
+from ..utils.gpu import GPU_ENABLED, xp, is_cupy_backend, get_gpu_engine, has_gpu_engine
 
 # Conditionally import cupy for specific exception handling if available
 try:
@@ -14,9 +14,9 @@ except ImportError:
 import sys
 import os
 # Standard relative import assuming package structure is respected
-from negative_converter.utils.imaging import apply_curve
-from negative_converter.config.settings import CONVERSION_DEFAULTS
-from negative_converter.utils.logger import get_logger
+from ..utils.imaging import apply_curve
+from ..config.settings import CONVERSION_DEFAULTS
+from ..utils.logger import get_logger
 
 logger = get_logger(__name__)
 def detect_orange_mask(negative_image):
@@ -92,10 +92,10 @@ def detect_orange_mask(negative_image):
         sample_means_np = np.array(sample_means)
         # Calculate std dev across samples for each channel, then average the std devs
         std_dev = np.mean(np.std(sample_means_np, axis=0))
-        # Define a threshold (could be configurable)
-        VARIANCE_THRESHOLD = 25.0 # Example threshold for std dev in 0-255 range
-        if std_dev > VARIANCE_THRESHOLD:
-            logger.warning(f"High variance ({std_dev:.2f}) detected between mask sample areas. Mask color might be inaccurate.")
+        # Use variance threshold from config
+        variance_threshold = CONVERSION_DEFAULTS.get('variance_threshold', 25.0)
+        if std_dev > variance_threshold:
+            logger.warning("High variance (%.2f) detected between mask sample areas. Mask color might be inaccurate.", std_dev)
         # Old averaging logic removed. The correct mask_color is calculated
         # using np.mean(sample_means, axis=0) above.
 
@@ -130,8 +130,8 @@ def apply_color_correction(image, correction_matrix=None):
         # Ensure input is a NumPy array if provided
         correction_matrix_np = np.asarray(correction_matrix, dtype=np.float32)
 
-    # Use xp imported from gpu util
-    if GPU_ENABLED:
+    # Use CuPy for GPU acceleration if available
+    if is_cupy_backend():
         try:
             # Transfer data to GPU
             img_gpu = xp.asarray(image, dtype=xp.float32)
@@ -184,9 +184,76 @@ def apply_color_correction(image, correction_matrix=None):
 class NegativeConverter:
     def __init__(self, film_profile="C41"):
         self.film_profile = film_profile
-        # TODO: Load appropriate conversion parameters based on film type if needed
-        # Use defaults from config, could be overridden by film_profile later
+        self.profile_data = self._load_film_profile(film_profile)
+        # Initialize params with defaults
         self.params = CONVERSION_DEFAULTS.copy()
+        
+        # Overwrite defaults with profile-specific data
+        self.params.update({
+            "correction_matrix": self.profile_data.get("correction_matrix", self.params["correction_matrix"]),
+            "curve_gamma_red": self.profile_data["gamma"].get("red", self.params.get("curve_gamma_red")),
+            "curve_gamma_green": self.profile_data["gamma"].get("green", self.params.get("curve_gamma_green")),
+            "curve_gamma_blue": self.profile_data["gamma"].get("blue", self.params.get("curve_gamma_blue")),
+            "hsv_saturation_boost": self.profile_data.get("saturation_boost", self.params.get("hsv_saturation_boost")),
+            "lab_a_target": self.profile_data["lab_correction"].get("a_target", self.params.get("lab_a_target")),
+            "lab_a_correction_factor": self.profile_data["lab_correction"].get("a_factor", self.params.get("lab_a_correction_factor")),
+            "lab_b_target": self.profile_data["lab_correction"].get("b_target", self.params.get("lab_b_target")),
+            "lab_b_correction_factor": self.profile_data["lab_correction"].get("b_factor", self.params.get("lab_b_correction_factor")),
+        })
+        logger.debug("NegativeConverter initialized with profile: %s", film_profile)
+
+    def _load_film_profile(self, profile_id):
+        """Load film profile parameters from a JSON file."""
+        import json
+        import os
+        
+        # Generic fallback data
+        base_data = {
+            "correction_matrix": CONVERSION_DEFAULTS["correction_matrix"],
+            "gamma": {
+                "red": CONVERSION_DEFAULTS.get("curve_gamma_red", 0.95),
+                "green": CONVERSION_DEFAULTS.get("curve_gamma_green", 1.0),
+                "blue": CONVERSION_DEFAULTS.get("curve_gamma_blue", 1.1)
+            },
+            "saturation_boost": CONVERSION_DEFAULTS.get("hsv_saturation_boost", 1.15),
+            "lab_correction": {
+                "a_target": CONVERSION_DEFAULTS.get("lab_a_target", 128.0),
+                "a_factor": CONVERSION_DEFAULTS.get("lab_a_correction_factor", 0.5),
+                "b_target": CONVERSION_DEFAULTS.get("lab_b_target", 128.0),
+                "b_factor": CONVERSION_DEFAULTS.get("lab_b_correction_factor", 0.7)
+            }
+        }
+
+        # Try to load from profiles directory
+        profile_map = {
+            "C41": "c41_generic.json",
+            "BW": "bw_generic.json"
+        }
+        
+        profile_filename = profile_map.get(profile_id, f"{profile_id.lower()}.json")
+        config_dir = os.path.dirname(os.path.dirname(__file__))
+        profile_path = os.path.join(config_dir, "config", "film_profiles", profile_filename)
+        
+        if os.path.exists(profile_path):
+            try:
+                with open(profile_path, 'r') as f:
+                    data = json.load(f)
+                    logger.debug("Loaded film profile from %s", profile_path)
+                    
+                    # Merge with base_data
+                    if "correction_matrix" in data:
+                        base_data["correction_matrix"] = np.array(data["correction_matrix"], dtype=np.float32)
+                    if "gamma" in data:
+                        base_data["gamma"].update(data["gamma"])
+                    if "saturation_boost" in data:
+                        base_data["saturation_boost"] = data["saturation_boost"]
+                    if "lab_correction" in data:
+                        base_data["lab_correction"].update(data["lab_correction"])
+                        
+            except Exception as e:
+                logger.error("Failed to load film profile %s: %s", profile_path, e)
+                
+        return base_data
 
     def convert(self, image, progress_callback=None, override_mask_classification=None):
         """
@@ -220,236 +287,184 @@ class NegativeConverter:
             raise ValueError("Input image must be a 3-channel (RGB) image")
         logger.debug("Input validation passed.")
 
-        # Backend (xp) is determined by the imported utils.gpu module
+        # --- STEP 0: Detect mask and classify (always on CPU) ---
+        if override_mask_classification:
+            mask_classification = override_mask_classification
+            logger.debug(f"Using overridden Mask Classification: {mask_classification}")
+            mask_color_np = detect_orange_mask(image)
+            logger.debug(f"Detected mask color (for potential C-41 override): {mask_color_np}")
+        else:
+            logger.debug("Auto-detecting mask color and classifying...")
+            mask_color_np = detect_orange_mask(image)
+            logger.debug(f"Detected mask color (from corners): {mask_color_np}")
 
-        # --- STEP 0: Initial Conversion to Float32 (CPU/GPU) ---
-        # Convert the input uint8 image to float32 ONCE.
-        # If GPU is enabled, this will transfer to GPU memory.
+            mask_classification = "Unknown/Other"
+            mask_rgb_u8 = np.clip(mask_color_np, 0, 255).astype(np.uint8).reshape(1, 1, 3)
+            mask_hsv = cv2.cvtColor(mask_rgb_u8, cv2.COLOR_RGB2HSV)[0, 0]
+            hue, sat, val = mask_hsv[0], mask_hsv[1], mask_hsv[2]
+            logger.debug(f"Mask HSV: H={hue}, S={sat}, V={val}")
+
+            CLEAR_SAT_MAX = self.params['mask_clear_sat_max']
+            C41_HUE_MIN = self.params['mask_c41_hue_min']
+            C41_HUE_MAX = self.params['mask_c41_hue_max']
+            C41_SAT_MIN = self.params['mask_c41_sat_min']
+            C41_VAL_MIN = self.params['mask_c41_val_min']
+            C41_VAL_MAX = self.params['mask_c41_val_max']
+
+            if sat < CLEAR_SAT_MAX:
+                mask_classification = "Clear/Near Clear"
+            elif (C41_HUE_MIN <= hue <= C41_HUE_MAX and
+                  sat >= C41_SAT_MIN and
+                  C41_VAL_MIN <= val <= C41_VAL_MAX):
+                mask_classification = "Likely C-41"
+            logger.debug(f"Auto-Detected Mask Classification: {mask_classification}")
+
+        # --- Calculate WB scale factors based on classification ---
+        scale_factors_np = None
+        if mask_classification == "Likely C-41":
+            inverted_mask_color_np = 255.0 - mask_color_np
+            inverted_mask_color_np = np.maximum(inverted_mask_color_np, 1e-6)
+            target_gray = self.params['wb_target_gray']
+            scale_factors_np = target_gray / inverted_mask_color_np
+            scale_factors_np = np.clip(scale_factors_np,
+                                       self.params['wb_clamp_min'],
+                                       self.params['wb_clamp_max'])
+            logger.debug(f"C-41 WB Scale Factors: {scale_factors_np}")
+        elif mask_classification == "Clear/Near Clear":
+            scale_factors_np = None  # No WB needed
+            logger.debug("Skipping WB (Clear/Near Clear base)")
+        else:  # Unknown/Other - Gray World AWB
+            # Need to calculate after inversion, so we'll handle this in the processing path
+            scale_factors_np = "gray_world"  # Marker to calculate later
+            logger.debug("Will apply Gray World AWB")
+
+        # Get correction matrix
+        correction_matrix_np = self.params['correction_matrix']
+
+        # --- Try GPU-accelerated path (Steps 1-3 in single dispatch) ---
+        gpu_used = False
+        corrected_float = None
+        use_gray_world = isinstance(scale_factors_np, str) and scale_factors_np == "gray_world"
+        
         try:
-            img_float = xp.asarray(image, dtype=xp.float32)
-            logger.debug(f"Initial conversion to {('CuPy' if GPU_ENABLED else 'NumPy')} float32 complete.")
+            if has_gpu_engine():
+                engine = get_gpu_engine()
+                
+                # For Gray World AWB, we need to calculate scale factors first
+                if use_gray_world:
+                    # Quick inversion on CPU to calculate averages
+                    inverted_temp = 255.0 - image.astype(np.float32)
+                    avg_r = max(np.mean(inverted_temp[:,:,0]), 1e-6)
+                    avg_g = max(np.mean(inverted_temp[:,:,1]), 1e-6)
+                    avg_b = max(np.mean(inverted_temp[:,:,2]), 1e-6)
+                    overall_avg = (avg_r + avg_g + avg_b) / 3.0
+                    gpu_scale_factors = np.array([overall_avg / avg_r,
+                                                  overall_avg / avg_g,
+                                                  overall_avg / avg_b], dtype=np.float32)
+                    if self.params.get('gray_world_clamp_enabled', True):
+                        gpu_scale_factors = np.clip(gpu_scale_factors,
+                                                    self.params['wb_clamp_min'],
+                                                    self.params['wb_clamp_max'])
+                    logger.debug(f"Gray World Scale Factors: {gpu_scale_factors}")
+                else:
+                    gpu_scale_factors = scale_factors_np
+                
+                # Convert scale factors to tuple for GPU engine
+                wb_scales = tuple(gpu_scale_factors) if gpu_scale_factors is not None else None
+                
+                # Process invert + WB + color matrix in single GPU dispatch
+                logger.debug("Using GPU engine for Steps 1-3 (invert, WB, color matrix)...")
+                corrected_u8 = engine.process_full_pipeline(
+                    image,
+                    invert=True,
+                    wb_scales=wb_scales,
+                    color_matrix=correction_matrix_np
+                )
+                # Convert to float32 for subsequent steps
+                corrected_float = corrected_u8.astype(np.float32)
+                gpu_used = True
+                logger.debug("GPU engine completed Steps 1-3")
+                report_progress(1)
+                report_progress(2)
+                report_progress(3)
         except Exception as e:
-            logger.error(f"Failed initial conversion/transfer to {('GPU' if GPU_ENABLED else 'CPU')} float32: {e}")
-            if GPU_ENABLED:
-                logger.info("Falling back to CPU for the entire conversion.")
-                # xp is already numpy if GPU_ENABLED is False, this case shouldn't be reachable
-                # If GPU failed during asarray, xp should still be cp, but we might want to force CPU
-                # However, the gpu util aims to provide a stable xp, so we trust it.
-                # If asarray fails, it likely throws before assignment, so xp remains cp.
-                # The exception handler should ideally signal to retry with CPU if possible.
-                # For now, assume the initial xp determination is robust.
-                pass # Let the exception propagate or be handled differently if needed
-                img_float = xp.asarray(image, dtype=xp.float32) # Try again with NumPy
-            else:
-                raise # Re-raise if CPU conversion failed
+            logger.warning(f"GPU acceleration failed, falling back to CPU: {e}")
+            gpu_used = False
 
-        try:
+        # --- CPU fallback path ---
+        if not gpu_used:
+            try:
+                img_float = xp.asarray(image, dtype=xp.float32)
+                logger.debug(f"Initial conversion to {('CuPy' if is_cupy_backend() else 'NumPy')} float32 complete.")
+            except Exception as e:
+                logger.error(f"Failed initial conversion: {e}")
+                raise
+
             # --- STEP 1: INVERT (Float32) ---
             logger.debug("Step 1: Inverting...")
             inverted_float = 255.0 - img_float
             logger.debug("Inversion complete (float32)")
-            report_progress(1) # Step 1: After Inversion
+            report_progress(1)
 
-            # --- STEP 2: POST-INVERSION MASK REMOVAL / WHITE BALANCE (Float32) ---
-            logger.debug("Step 2: Mask Removal / WB...")
-
-            if override_mask_classification:
-                mask_classification = override_mask_classification
-                logger.debug(f"Using overridden Mask Classification: {mask_classification}")
-                # We still need a mask_color_np for C-41 neutralization, detect it even if overridden
-                # This ensures the neutralization logic has the color it needs if C-41 is forced
-                mask_color_np = detect_orange_mask(image)
-                logger.debug(f"Detected mask color (for potential C-41 override): {mask_color_np}")
-            else:
-                # --- Auto-Detect and Classify Mask ---
-                logger.debug("Auto-detecting mask color and classifying...")
-                mask_color_np = detect_orange_mask(image) # Pass original uint8 image
-                logger.debug(f"Detected mask color (from corners): {mask_color_np}")
-
-                # --- Classify detected mask color ---
-                mask_classification = "Unknown/Other" # Default
-                # Convert RGB [0-255] to HSV [0-179, 0-255, 0-255] for analysis
-                # Reshape to 1x1x3 for cvtColor
-                mask_rgb_u8 = np.clip(mask_color_np, 0, 255).astype(np.uint8).reshape(1, 1, 3)
-                mask_hsv = cv2.cvtColor(mask_rgb_u8, cv2.COLOR_RGB2HSV)[0, 0]
-                hue, sat, val = mask_hsv[0], mask_hsv[1], mask_hsv[2]
-                logger.debug(f"Mask HSV: H={hue}, S={sat}, V={val}")
-
-                # --- Classify Base Type ---
-                # Use thresholds from config
-                CLEAR_SAT_MAX = self.params['mask_clear_sat_max']
-                C41_HUE_MIN = self.params['mask_c41_hue_min']
-                C41_HUE_MAX = self.params['mask_c41_hue_max']
-                C41_SAT_MIN = self.params['mask_c41_sat_min']
-                C41_VAL_MIN = self.params['mask_c41_val_min']
-                C41_VAL_MAX = self.params['mask_c41_val_max']
-
-                if sat < CLEAR_SAT_MAX:
-                    mask_classification = "Clear/Near Clear"
-                elif (C41_HUE_MIN <= hue <= C41_HUE_MAX and
-                      sat >= C41_SAT_MIN and
-                      C41_VAL_MIN <= val <= C41_VAL_MAX):
-                    mask_classification = "Likely C-41"
-                # else: remains "Unknown/Other"
-                logger.debug(f"Auto-Detected Mask Classification: {mask_classification}")
-
-            # --- Apply Neutralization Based on Classification ---
-            if mask_classification == "Likely C-41":
-                logger.debug("Applying C-41 mask neutralization...")
-                # Invert the mask color (target cast color in the inverted image)
-                inverted_mask_color_np = 255.0 - mask_color_np
-                inverted_mask_color_np = np.maximum(inverted_mask_color_np, 1e-6) # Avoid division by zero
-
-                # Calculate scaling factors to make the inverted mask color neutral gray
-                # Use fixed mid-gray (128.0) as target gray
-                target_gray = self.params['wb_target_gray']
-                # TODO: Consider alternative target_gray calculations if needed
-                scale_factors_np = target_gray / inverted_mask_color_np
-                # Clamp scale factors to prevent extreme shifts (Values might need tuning)
-                # TODO: Make clamp range configurable?
-                # Use clamp values from config
-                scale_factors_np = np.clip(scale_factors_np,
-                                           self.params['wb_clamp_min'],
-                                           self.params['wb_clamp_max'])
-
-                logger.debug(f"Inverted Mask Color: {inverted_mask_color_np}")
-                logger.debug(f"Target Gray: {target_gray}")
-                logger.debug(f"WB Scale Factors: {scale_factors_np}")
-
-                # Transfer scale factors to GPU if needed
-                scale_factors = xp.asarray(scale_factors_np, dtype=xp.float32)
-
-                # Apply scaling factors to the inverted float image
-                neutralized_float = inverted_float * scale_factors
-                logger.debug("C-41 mask removal / WB scaling applied (float32)")
-
-            elif mask_classification == "Clear/Near Clear":
-                logger.debug("Skipping neutralization (Clear/Near Clear base detected).")
-                neutralized_float = inverted_float # Use the simply inverted image
-            else: # Unknown/Other (Includes Vision 250D for now)
-                logger.debug("Applying Gray World AWB for Unknown/Other base...")
-                # Calculate average R, G, B of the inverted image
-                # Need to handle potential GPU array here
-                if GPU_ENABLED:
+            # --- STEP 2: WHITE BALANCE (Float32) ---
+            logger.debug("Step 2: White Balance...")
+            if use_gray_world:
+                # Calculate Gray World AWB
+                if is_cupy_backend():
                     avg_r = float(xp.mean(inverted_float[:,:,0]))
                     avg_g = float(xp.mean(inverted_float[:,:,1]))
                     avg_b = float(xp.mean(inverted_float[:,:,2]))
-                else: # NumPy array
+                else:
                     avg_r = np.mean(inverted_float[:,:,0])
                     avg_g = np.mean(inverted_float[:,:,1])
                     avg_b = np.mean(inverted_float[:,:,2])
-
-                # Avoid division by zero if channel average is zero
                 avg_r = max(avg_r, 1e-6)
                 avg_g = max(avg_g, 1e-6)
                 avg_b = max(avg_b, 1e-6)
-
-                # Calculate overall average brightness
                 overall_avg = (avg_r + avg_g + avg_b) / 3.0
-
-                # Calculate Gray World scaling factors
                 scale_factors_np = np.array([overall_avg / avg_r,
                                              overall_avg / avg_g,
                                              overall_avg / avg_b], dtype=np.float32)
+                if self.params.get('gray_world_clamp_enabled', True):
+                    scale_factors_np = np.clip(scale_factors_np,
+                                               self.params['wb_clamp_min'],
+                                               self.params['wb_clamp_max'])
+                logger.debug(f"Gray World Scale Factors: {scale_factors_np}")
 
-                # Clamp scale factors (using same clamps as C-41 for now)
-                # TODO: Consider different/no clamps for Gray World?
-                # Use clamp values from config
-                scale_factors_np = np.clip(scale_factors_np,
-                                           self.params['wb_clamp_min'],
-                                           self.params['wb_clamp_max'])
-
-                logger.debug(f"Gray World Averages: R={avg_r:.2f}, G={avg_g:.2f}, B={avg_b:.2f}")
-                logger.debug(f"Gray World Overall Avg: {overall_avg:.2f}")
-                logger.debug(f"Gray World Scale Factors (Clamped): {scale_factors_np}")
-
-                # Transfer scale factors to GPU if needed
+            if scale_factors_np is not None:
                 scale_factors = xp.asarray(scale_factors_np, dtype=xp.float32)
-
-                # Apply scaling factors
                 neutralized_float = inverted_float * scale_factors
-                logger.debug("Gray World AWB applied (float32)")
+            else:
+                neutralized_float = inverted_float
+            logger.debug("White Balance applied")
+            report_progress(2)
 
-            # Result of this step is 'neutralized_float'
-            report_progress(2) # Step 2: After Mask Removal / WB
-
-
-            # --- STEP 3: CHANNEL-SPECIFIC CORRECTIONS (using float32) ---
-            logger.debug("Step 3: Channel-specific adjustments...")
-            # Use default correction matrix from config
-            # TODO: Allow overriding based on film_profile
-            correction_matrix_np = self.params['correction_matrix']
-            correction_matrix = xp.asarray(correction_matrix_np) # Transfer matrix if needed
-
-            # Apply matrix multiplication (on float32) using the neutralized image
+            # --- STEP 3: COLOR MATRIX (Float32) ---
+            logger.debug("Step 3: Color matrix...")
+            correction_matrix = xp.asarray(correction_matrix_np)
             h, w, c = neutralized_float.shape
             flat_image_float = neutralized_float.reshape(-1, 3)
-            # Use xp.dot which works for both NumPy and CuPy
             corrected_flat_float = xp.dot(flat_image_float, correction_matrix.T)
             corrected_float = corrected_flat_float.reshape(h, w, 3)
-            # No clipping or uint8 conversion yet
-            logger.debug("Color correction matrix applied (float32)")
-            report_progress(3) # Step 3: After Color Correction
+            
+            # Transfer back to CPU if needed for subsequent steps
+            if is_cupy_backend():
+                corrected_float = xp.asnumpy(corrected_float)
+            logger.debug("Color matrix applied")
+            report_progress(3)
 
-            # --- STEP 4: AUTO WHITE BALANCE (REMOVED - Handled by Step 2) ---
-            # print("[Converter Debug] Step 4: White balance...")
-            # # For WB calculations, we might need LAB conversion.
-            # # If using GPU, cvtColor might not be available directly in CuPy.
-            # # Perform LAB conversion and analysis on CPU temporarily for simplicity.
-            # # Transfer corrected_float back to CPU ONLY for this calculation if on GPU.
-            # if GPU_ENABLED:
-            #     corrected_np_temp = xp.asnumpy(corrected_float)
-            # else:
-            #     corrected_np_temp = corrected_float # It's already NumPy
-            #
-            # # Clip to uint8 range *before* LAB conversion to avoid issues
-            # corrected_np_temp_u8 = np.clip(corrected_np_temp, 0, 255).astype(np.uint8)
-            # l_channel_np = cv2.cvtColor(corrected_np_temp_u8, cv2.COLOR_RGB2LAB)[:,:,0]
-            # lower = np.percentile(l_channel_np, 60)
-            # upper = np.percentile(l_channel_np, 90)
-            # wb_mask_np = (l_channel_np >= lower) & (l_channel_np <= upper)
-            #
-            # r_factor, g_factor, b_factor = 1.0, 1.0, 1.0 # Default factors
-            # if np.sum(wb_mask_np) > 100:
-            #     wb_pixels_np = corrected_np_temp[wb_mask_np] # Sample from float array
-            #     r_avg = np.mean(wb_pixels_np[:,0])
-            #     g_avg = np.mean(wb_pixels_np[:,1])
-            #     b_avg = np.mean(wb_pixels_np[:,2])
-            #
-            #     if b_avg > r_avg and b_avg > g_avg: # Custom WB for blue cast
-            #         target = (r_avg + g_avg) / 2
-            #         r_factor = min(max(target / max(r_avg, 1e-6), 0.8), 1.2) # Avoid division by zero
-            #         g_factor = min(max(target / max(g_avg, 1e-6), 0.8), 1.2)
-            #         b_factor = min(max(target / max(b_avg, 1e-6), 0.5), 0.9)
-            #         print(f"[Converter Debug] Custom WB factors: R:{r_factor:.2f}, G:{g_factor:.2f}, B:{b_factor:.2f}")
-            #     else: # Standard gray-world WB
-            #         avg = (r_avg + g_avg + b_avg) / 3.0
-            #         r_factor = avg / max(r_avg, 1e-6)
-            #         g_factor = avg / max(g_avg, 1e-6)
-            #         b_factor = avg / max(b_avg, 1e-6)
-            #         r_factor = min(max(r_factor, 0.8), 1.2)
-            #         g_factor = min(max(g_factor, 0.8), 1.2)
-            #         b_factor = min(max(b_factor, 0.8), 1.2)
-            #         print(f"[Converter Debug] Gray-world WB factors: R:{r_factor:.2f}, G:{g_factor:.2f}, B:{b_factor:.2f}")
-            #
-            #     # Apply WB factors to the main float32 array (CPU or GPU)
-            #     corrected_float[:,:,0] *= r_factor
-            #     corrected_float[:,:,1] *= g_factor
-            #     corrected_float[:,:,2] *= b_factor
-            #     print("[Converter Debug] White balance applied (float32)")
-            # else:
-            #     print("[Converter Debug] Skipped WB due to insufficient reference pixels")
-            # # No clipping or uint8 conversion yet
+        try:
+            # Ensure corrected_float is a NumPy array for subsequent CPU operations
+            if is_cupy_backend() and hasattr(corrected_float, 'get'):
+                corrected_float = corrected_float.get()
 
             # --- STEP 4: CHANNEL-SPECIFIC CURVES (using apply_curve on float32) ---
             logger.debug("Step 4: Channel-specific curves (float32)...")
             # Work directly on the float32 array from the previous step
-            curves_result_float = corrected_float.copy()
-
-            # Histogram calculation still needs uint8 data for np.histogram(..., range=[0, 256])
+            curves_result_float = corrected_float.copy()            # Histogram calculation still needs uint8 data for np.histogram(..., range=[0, 256])
             # Create a temporary uint8 copy *on the CPU* for histogramming
             temp_u8_for_hist = xp.clip(corrected_float, 0, 255)
-            if GPU_ENABLED:
+            if is_cupy_backend():
                 temp_u8_for_hist = xp.asnumpy(temp_u8_for_hist).astype(np.uint8)
             else:
                 temp_u8_for_hist = temp_u8_for_hist.astype(np.uint8)
@@ -515,7 +530,7 @@ class NegativeConverter:
             grading_input_float = curves_result_float # Already float32 (CPU or GPU) from Step 5
 
             # Perform LAB/HSV adjustments. Requires CPU for cv2.cvtColor.
-            if GPU_ENABLED:
+            if is_cupy_backend():
                 grading_input_np = xp.asnumpy(grading_input_float)
             else:
                 grading_input_np = grading_input_float # Already NumPy
@@ -578,9 +593,13 @@ class NegativeConverter:
             logger.warning("apply_tone_curve expects RGB image.")
             return image # Expects RGB
         # Ensure input is uint8 NumPy array for curve application
-        if GPU_ENABLED and xp.get_array_module(image) == xp: # Check if it's a CuPy array
-             logger.warning("apply_tone_curve expects NumPy image, got CuPy. Converting.")
-             image = xp.asnumpy(image) # Convert from GPU to CPU
+        if is_cupy_backend() and cp_module is not None:
+            try:
+                if cp_module.get_array_module(image) == cp_module:
+                    logger.warning("apply_tone_curve expects NumPy image, got CuPy. Converting.")
+                    image = cp_module.asnumpy(image) # Convert from GPU to CPU
+            except Exception:
+                pass  # Not a CuPy array
 
         # Ensure uint8 type after potential conversion
         if image.dtype != np.uint8:

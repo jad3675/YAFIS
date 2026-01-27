@@ -7,9 +7,9 @@ import json
 import concurrent.futures
 import math
 
-from negative_converter.utils.gpu import GPU_ENABLED, xp, cp_module
-from negative_converter.utils.imaging import apply_curve
-from negative_converter.utils.logger import get_logger
+from ..utils.gpu import GPU_ENABLED, xp, cp_module, is_cupy_backend
+from ..utils.imaging import apply_curve
+from ..utils.logger import get_logger
 
 logger = get_logger(__name__)
 cp = cp_module  # Convenience alias; prefer xp for backend-agnostic ops
@@ -44,161 +44,115 @@ def _validate_film_preset(preset_data, source="<unknown>"):
 
 # --- Helper Functions (from Section 5.3) ---
 
+# Pre-computed LUTs for gamma conversion (much faster than np.power)
+_LINEAR_LUT = None
+_SRGB_LUT = None
+
+def _get_linear_lut():
+    """Get pre-computed sRGB to linear LUT."""
+    global _LINEAR_LUT
+    if _LINEAR_LUT is None:
+        _LINEAR_LUT = (np.power(np.arange(256) / 255.0, 2.2) * 255.0).astype(np.float32)
+    return _LINEAR_LUT
+
+def _get_srgb_lut():
+    """Get pre-computed linear to sRGB LUT."""
+    global _SRGB_LUT
+    if _SRGB_LUT is None:
+        _SRGB_LUT = (np.power(np.arange(256) / 255.0, 1.0/2.2) * 255.0).astype(np.float32)
+    return _SRGB_LUT
+
 def convert_to_linear_rgb(image):
-    """Convert from sRGB to linear RGB (GPU/CPU). Returns float32 array (CuPy or NumPy)."""
+    """Convert from sRGB to linear RGB using LUT (fast). Returns float32 array."""
     if image is None or image.size == 0:
         return image
-
-    backend = cp if GPU_ENABLED else np
-    img_arr = backend.asarray(image, dtype=backend.float32) / 255.0
-    try:
-        return backend.power(img_arr, 2.2) * 255.0
-    except Exception:
-        logger.exception(
-            "Linear conversion failed (%s). Falling back to CPU.",
-            "GPU" if GPU_ENABLED else "CPU",
-        )
-        img_arr_cpu = image.astype(np.float32) / 255.0
-        return np.power(img_arr_cpu, 2.2) * 255.0
+    
+    # Use LUT for fast conversion (much faster than np.power)
+    lut = _get_linear_lut()
+    
+    # Ensure uint8 input
+    if image.dtype != np.uint8:
+        img_u8 = np.clip(image, 0, 255).astype(np.uint8)
+    else:
+        img_u8 = image
+    
+    # Apply LUT per channel
+    return lut[img_u8].astype(np.float32)
 
 def convert_to_srgb(linear_image):
-    """Convert from linear RGB float back to sRGB uint8 for display (GPU/CPU)"""
+    """Convert from linear RGB float back to sRGB uint8 using LUT (fast)."""
     if linear_image is None or linear_image.size == 0: return linear_image
-    # Determine if input is CuPy or NumPy
-    is_cupy_input = 'cupy' in str(type(linear_image))
-    xp = cp if is_cupy_input and GPU_ENABLED else np
-    linear_image_backend = linear_image if (is_cupy_input and GPU_ENABLED) else (cp.asnumpy(linear_image) if is_cupy_input else linear_image)
-
-    try:
-        # Ensure input is float32
-        linear_float = xp.asarray(linear_image_backend, dtype=xp.float32) / 255.0
-        # Guard against negatives before gamma (prevents NaNs and RuntimeWarnings)
-        linear_float = xp.clip(linear_float, 0.0, None)
-        srgb_float = xp.power(linear_float, 1.0/2.2)
-        srgb_float_scaled = xp.clip(srgb_float * 255.0, 0, 255)
-        # Convert final result to uint8 NumPy
-        return (xp.asnumpy(srgb_float_scaled) if xp == cp else srgb_float_scaled).astype(np.uint8)
-    except Exception:
-        logger.exception("sRGB conversion to uint8 failed (%s). Trying CPU fallback.", "GPU" if xp == cp else "CPU")
-        # Fallback to CPU if GPU failed or if CPU failed initially (though less likely)
-        xp_fallback = np
-        linear_image_np = cp.asnumpy(linear_image_backend) if is_cupy_input else linear_image_backend
-        try:
-            linear_float_fb = linear_image_np.astype(xp_fallback.float32) / 255.0
-            linear_float_fb = xp_fallback.clip(linear_float_fb, 0.0, None)
-            srgb_fb = xp_fallback.power(linear_float_fb, 1.0/2.2)
-            return xp_fallback.clip(srgb_fb * 255.0, 0, 255).astype(xp_fallback.uint8)
-        except Exception as e_cpu:
-             logger.error(f"sRGB Conversion CPU fallback also failed: {e_cpu}. Returning None.")
-             # Return None or raise error? Returning None might be safer downstream.
-             return None # Indicate failure
+    
+    # Use LUT for fast conversion
+    lut = _get_srgb_lut()
+    
+    # Ensure uint8 input for LUT indexing
+    if linear_image.dtype != np.uint8:
+        linear_u8 = np.clip(linear_image, 0, 255).astype(np.uint8)
+    else:
+        linear_u8 = linear_image
+    
+    # Apply LUT and return uint8
+    return np.clip(lut[linear_u8], 0, 255).astype(np.uint8)
 
 def convert_to_srgb_float(linear_image_float):
-    """Convert from linear RGB float back to sRGB float (GPU/CPU, returns float32 0-255)"""
+    """Convert from linear RGB float back to sRGB float using LUT (fast). Returns float32 0-255."""
     if linear_image_float is None or linear_image_float.size == 0: return linear_image_float
-    # Determine if input is CuPy or NumPy
-    is_cupy_input = 'cupy' in str(type(linear_image_float))
-    xp = cp if is_cupy_input and GPU_ENABLED else np
-    linear_image_backend = linear_image_float # Assume input is already correct backend type
-
-    try:
-        # Ensure input is float32
-        linear_float_norm = xp.asarray(linear_image_backend, dtype=xp.float32) / 255.0
-        # Guard against negatives before gamma (prevents NaNs and RuntimeWarnings)
-        linear_float_norm = xp.clip(linear_float_norm, 0.0, None)
-        srgb_float_norm = xp.power(linear_float_norm, 1.0/2.2)
-        srgb_float_scaled = srgb_float_norm * 255.0
-        # Return float result (CuPy or NumPy)
-        return srgb_float_scaled
-    except Exception:
-        logger.exception("Linear to sRGB float conversion failed (%s). Trying CPU fallback.", "GPU" if xp == cp else "CPU")
-        # Fallback to CPU if GPU failed or if CPU failed initially
-        xp_fallback = np
-        linear_image_np = cp.asnumpy(linear_image_backend) if is_cupy_input else linear_image_backend
-        try:
-            linear_float_fb_norm = linear_image_np.astype(xp_fallback.float32) / 255.0
-            linear_float_fb_norm = xp_fallback.clip(linear_float_fb_norm, 0.0, None)
-            srgb_fb_norm = xp_fallback.power(linear_float_fb_norm, 1.0/2.2)
-            return srgb_fb_norm * 255.0 # Return NumPy float
-        except Exception as e_cpu:
-             logger.error(f"Linear to sRGB Float CPU fallback also failed: {e_cpu}. Returning input.")
-             return linear_image_float.copy() # Return original float input
+    
+    # Use LUT for fast conversion
+    lut = _get_srgb_lut()
+    
+    # Ensure uint8 input for LUT indexing
+    if linear_image_float.dtype != np.uint8:
+        linear_u8 = np.clip(linear_image_float, 0, 255).astype(np.uint8)
+    else:
+        linear_u8 = linear_image_float
+    
+    # Apply LUT and return float32
+    return lut[linear_u8].astype(np.float32)
 
 
 def apply_color_matrix(rgb_image, matrix):
-    """Apply color transformation matrix to RGB image (GPU/CPU, expects float 0-255)"""
+    """Apply color transformation matrix to RGB image. Expects float 0-255, returns float 0-255."""
     if rgb_image is None or rgb_image.size == 0: return rgb_image
     matrix_np = np.asarray(matrix, dtype=np.float32)
-    is_cupy_input = 'cupy' in str(type(rgb_image))
-
-    if GPU_ENABLED:
-        xp = cp
-        try:
-            img_gpu = xp.asarray(rgb_image, dtype=xp.float32) # Ensure CuPy float
-            matrix_gpu = xp.asarray(matrix_np)
-            h, w, c = img_gpu.shape
-            if c != 3: raise ValueError("Input image must be 3-channel RGB")
-            pixels_gpu = img_gpu.reshape(-1, 3)
-            transformed_gpu = xp.dot(pixels_gpu, matrix_gpu.T)
-            return transformed_gpu.reshape(h, w, 3) # Return CuPy float
-        except Exception:
-            logger.exception("Color matrix failed (GPU). Falling back to CPU.")
-            # Fallback needs NumPy input
-            rgb_image_np = cp.asnumpy(rgb_image) if is_cupy_input else rgb_image
-            xp = np # Switch to NumPy for fallback
-            img_float = rgb_image_np.astype(xp.float32)
-            h, w, c = img_float.shape
-            if c != 3: raise ValueError("Input image must be 3-channel RGB")
-            pixels = img_float.reshape(-1, 3)
-            transformed = xp.dot(pixels, matrix_np.T) # Use NumPy matrix
-            return transformed.reshape(h, w, 3) # Return NumPy float
-    else: # CPU Path
-        xp = np
-        # Ensure input is NumPy array
-        rgb_image_np = cp.asnumpy(rgb_image) if is_cupy_input else rgb_image
-        img_float = rgb_image_np.astype(xp.float32)
-        h, w, c = img_float.shape
-        if c != 3: raise ValueError("Input image must be 3-channel RGB")
-        pixels = img_float.reshape(-1, 3)
-        transformed = xp.dot(pixels, matrix_np.T)
-        return transformed.reshape(h, w, 3) # Return NumPy float
-
-
-# Removed redundant helper functions:
-# _apply_tone_curve_channel_cpu_lut
-# _apply_tone_curve_channel_float_cpu
-# _apply_tone_curve_channel_gpu
-# Use utils.imaging.apply_curve instead.
-
-# apply_film_grain function moved to processing/adjustments.py (AdvancedAdjustments class)
-
-# Removed local apply_color_balance function (now in AdvancedAdjustments)
+    
+    # Ensure float32 input
+    img_float = rgb_image if rgb_image.dtype == np.float32 else rgb_image.astype(np.float32)
+    h, w, c = img_float.shape
+    if c != 3: raise ValueError("Input image must be 3-channel RGB")
+    
+    # Reshape, apply matrix, reshape back
+    pixels = img_float.reshape(-1, 3)
+    transformed = np.dot(pixels, matrix_np.T)
+    return transformed.reshape(h, w, 3)
 
 
 def apply_dynamic_range(image_float, compression, shadow_preservation, highlight_rolloff):
-    """Apply dynamic range compression (GPU/CPU, expects float32 0-255, returns float32 0-255)"""
+    """Apply dynamic range compression. Expects float32 0-255, returns float32 0-255."""
     if image_float is None or image_float.size == 0: return image_float
     if compression == 1.0 and shadow_preservation == 0.0 and highlight_rolloff == 0.0: return image_float.copy()
 
     # Determine backend based on input type
     is_cupy_input = 'cupy' in str(type(image_float))
-    xp = cp if is_cupy_input else np
+    use_cupy = is_cupy_input and is_cupy_backend()
+    backend = cp if use_cupy else np
 
     # Need LAB conversion, which requires uint8 input for cv2.cvtColor
     # Convert float input to temporary uint8 on CPU for LAB conversion
-    temp_image_uint8_np = np.clip(cp.asnumpy(image_float) if is_cupy_input else image_float, 0, 255).astype(np.uint8)
+    temp_image_uint8_np = np.clip(cp.asnumpy(image_float) if (is_cupy_input and cp is not None) else image_float, 0, 255).astype(np.uint8)
     lab_np = cv2.cvtColor(temp_image_uint8_np, cv2.COLOR_RGB2LAB).astype(np.float32) # Keep LAB as float
 
     # Perform calculations using the appropriate backend
     try:
-        lab = xp.asarray(lab_np) # Transfer LAB to GPU if needed
+        lab = backend.asarray(lab_np) # Transfer LAB to GPU if needed
         l_channel = lab[..., 0] / 255.0 # Normalize L channel (0-1)
 
         # Apply compression logic
-        v_compressed = xp.power(l_channel, compression)
-        shadow_mask = 1.0 - xp.power(l_channel, 0.5)
+        v_compressed = backend.power(l_channel, compression)
+        shadow_mask = 1.0 - backend.power(l_channel, 0.5)
         v_compressed += shadow_mask * shadow_preservation * (l_channel - v_compressed)
-        highlight_mask = xp.power(l_channel, 2.0)
+        highlight_mask = backend.power(l_channel, 2.0)
         v_compressed += highlight_mask * highlight_rolloff * (l_channel - v_compressed)
 
         # Update L channel in LAB array (still float)
@@ -206,24 +160,23 @@ def apply_dynamic_range(image_float, compression, shadow_preservation, highlight
 
         # Convert LAB back to RGB (needs uint8 input for cv2.cvtColor)
         # Clip LAB result, convert to uint8 NumPy on CPU
-        lab_result_uint8_np = np.clip(cp.asnumpy(lab) if is_cupy_input else lab, 0, 255).astype(np.uint8)
+        lab_result_uint8_np = np.clip(backend.asnumpy(lab) if use_cupy else lab, 0, 255).astype(np.uint8)
         rgb_result_uint8_np = cv2.cvtColor(lab_result_uint8_np, cv2.COLOR_LAB2RGB)
 
         # Convert final RGB result back to float (matching input type)
-        return xp.asarray(rgb_result_uint8_np, dtype=xp.float32)
+        return backend.asarray(rgb_result_uint8_np, dtype=backend.float32)
 
     except Exception:
-        logger.exception("Dynamic Range application failed (%s).", "GPU" if is_cupy_input else "CPU")
+        logger.exception("Dynamic Range application failed (%s).", "GPU" if use_cupy else "CPU")
         # Fallback: If GPU failed, try CPU if input was GPU
-        if is_cupy_input:
+        if use_cupy:
             logger.info("Dynamic Range: Falling back to CPU.")
-            xp_fallback = np
             try:
                  l_channel_fb = lab_np[..., 0] / 255.0
-                 v_compressed_fb = xp_fallback.power(l_channel_fb, compression)
-                 shadow_mask_fb = 1.0 - xp_fallback.power(l_channel_fb, 0.5)
+                 v_compressed_fb = np.power(l_channel_fb, compression)
+                 shadow_mask_fb = 1.0 - np.power(l_channel_fb, 0.5)
                  v_compressed_fb += shadow_mask_fb * shadow_preservation * (l_channel_fb - v_compressed_fb)
-                 highlight_mask_fb = xp_fallback.power(l_channel_fb, 2.0)
+                 highlight_mask_fb = np.power(l_channel_fb, 2.0)
                  v_compressed_fb += highlight_mask_fb * highlight_rolloff * (l_channel_fb - v_compressed_fb)
                  lab_np[..., 0] = v_compressed_fb * 255.0
                  lab_result_uint8_np_fb = np.clip(lab_np, 0, 255).astype(np.uint8)
@@ -304,7 +257,7 @@ class FilmPresetManager:
         return self.presets.copy()
 
     # Modified signature to accept grain_scale from UI
-    def apply_preset(self, image, preset, intensity=1.0, grain_scale=None):
+    def apply_preset(self, image, preset, intensity=1.0, grain_scale=None, preview_mode=False):
         """
         Applies a loaded film preset to an image sequentially (no tiling).
 
@@ -313,12 +266,26 @@ class FilmPresetManager:
             preset (dict or str): Preset data dictionary or preset ID string.
             intensity (float): The intensity of the preset effect (0.0 to 1.0).
             grain_scale (float, optional): UI override for grain scale (e.g., 0.0 to 2.0). Defaults to None.
-
+            preview_mode (bool): If True, process at lower resolution for faster preview.
 
         Returns:
             np.ndarray: The processed image (uint8 RGB).
         """
         if image is None or image.size == 0: return image
+        
+        # For preview mode, process at lower resolution
+        original_size = None
+        if preview_mode:
+            h, w = image.shape[:2]
+            # Target ~1MP for preview (roughly 1000x1000)
+            max_preview_pixels = 1_000_000
+            current_pixels = h * w
+            if current_pixels > max_preview_pixels:
+                scale = np.sqrt(max_preview_pixels / current_pixels)
+                new_h, new_w = int(h * scale), int(w * scale)
+                original_size = (w, h)  # Store for upscaling later
+                image = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+                logger.debug(f"Preview mode: downscaled from {w}x{h} to {new_w}x{new_h}")
 
         preset_data = None
         preset_id_str = "N/A"  # For logging
@@ -364,17 +331,21 @@ class FilmPresetManager:
              params["grainParams"]["intensity"] = base_intensity * grain_scale
              logger.debug(f"  Injected grain_scale {grain_scale}, base intensity {base_intensity}, resulting intensity {params['grainParams']['intensity']}")
         # --- Apply preset sequentially to the whole image ---
-        logger.info("Applying film preset '%s' sequentially...", preset_id_str)
+        logger.info("Applying film preset '%s' %s...", preset_id_str, "(preview)" if preview_mode else "sequentially")
         try:
             processed_image = self._apply_full_preset(image, params)
             if processed_image is None:
                 logger.error("_apply_full_preset returned None for '%s'.", preset_id_str)
+                if original_size:
+                    return cv2.resize(image, original_size, interpolation=cv2.INTER_LINEAR)
                 return image.copy()
         except Exception:
             logger.exception("Error applying film preset '%s'.", preset_id_str)
+            if original_size:
+                return cv2.resize(image, original_size, interpolation=cv2.INTER_LINEAR)
             return image.copy()
 
-        logger.info("Sequential processing finished for film preset '%s'.", preset_id_str)
+        logger.info("Processing finished for film preset '%s'.", preset_id_str)
 
         # Blend with original based on intensity
         if 0.0 <= intensity < 0.99:
@@ -382,9 +353,16 @@ class FilmPresetManager:
             processed_image_float = processed_image.astype(np.float32)
             blended = cv2.addWeighted(original_image_float, 1.0 - intensity,
                                       processed_image_float, intensity, 0)
-            return np.clip(blended, 0, 255).astype(np.uint8)
+            result = np.clip(blended, 0, 255).astype(np.uint8)
         else:
-            return processed_image # Return the fully processed uint8 image
+            result = processed_image
+        
+        # Upscale back to original size if preview mode
+        if original_size:
+            result = cv2.resize(result, original_size, interpolation=cv2.INTER_LINEAR)
+            logger.debug(f"Preview mode: upscaled back to {original_size[0]}x{original_size[1]}")
+        
+        return result
 
 
     def _apply_full_preset(self, image, params):
@@ -395,9 +373,10 @@ class FilmPresetManager:
         preset_id_str = params.get('id', 'N/A')
         logger.debug(f"  _apply_full_preset Start (Float Pipeline): {preset_id_str}")
 
-        # Determine backend
-        xp = cp if GPU_ENABLED else np
-        logger.debug(f"    Preset Backend: {'CuPy (GPU)' if GPU_ENABLED else 'NumPy (CPU)'}")
+        # Determine backend - only use CuPy if actually available
+        use_cupy = is_cupy_backend()
+        backend = cp if use_cupy else np
+        logger.debug(f"    Preset Backend: {'CuPy (GPU)' if use_cupy else 'NumPy (CPU)'}")
 
         # --- Processing Pipeline (float32) ---
         try:
@@ -436,7 +415,7 @@ class FilmPresetManager:
                     if not curves.get("g"): g_ch = apply_curve(g_ch, curves["rgb"])
                     if not curves.get("b"): b_ch = apply_curve(b_ch, curves["rgb"])
 
-                working_float = xp.stack([r_ch, g_ch, b_ch], axis=-1)
+                working_float = backend.stack([r_ch, g_ch, b_ch], axis=-1)
                 logger.debug("    Preset Step 3: Done.")
 
             # 4. Convert back to sRGB Float
@@ -458,9 +437,9 @@ class FilmPresetManager:
 
                 # Apply directly to float array
                 if red_shift != 0 or green_shift != 0 or blue_shift != 0:
-                    working_float += xp.array([red_shift, green_shift, blue_shift], dtype=xp.float32)
+                    working_float += backend.array([red_shift, green_shift, blue_shift], dtype=backend.float32)
                 if red_balance != 1.0 or green_balance != 1.0 or blue_balance != 1.0:
-                    working_float *= xp.array([red_balance, green_balance, blue_balance], dtype=xp.float32)
+                    working_float *= backend.array([red_balance, green_balance, blue_balance], dtype=backend.float32)
                 logger.debug("    Preset Step 5: Done.")
 
             # 6. Apply Dynamic Range Compression (in sRGB float space)
@@ -496,8 +475,8 @@ class FilmPresetManager:
 
             # 8. Final Clip and Convert to uint8 NumPy
             logger.debug("    Preset Step 8: Clipping and Converting to uint8...")
-            final_float_clipped = xp.clip(working_float, 0, 255)
-            final_uint8_np = (xp.asnumpy(final_float_clipped) if GPU_ENABLED else final_float_clipped).astype(np.uint8)
+            final_float_clipped = backend.clip(working_float, 0, 255)
+            final_uint8_np = (backend.asnumpy(final_float_clipped) if use_cupy else final_float_clipped).astype(np.uint8)
             logger.debug(f"  _apply_full_preset End: {preset_id_str}")
             return final_uint8_np
 

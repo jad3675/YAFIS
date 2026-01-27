@@ -5,7 +5,7 @@ import os
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from negative_converter.utils.logger import get_logger
+from ..utils.logger import get_logger
 
 logger = get_logger(__name__)
 
