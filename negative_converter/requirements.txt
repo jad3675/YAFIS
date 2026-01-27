@@ -1,6 +1,14 @@
-PyQt6
-numpy
-Pillow
-opencv-contrib-python
-appdirs
-pyqtgraph
+PyQt6>=6.5.0,<7.0
+numpy>=1.24.0,<2.0
+Pillow>=10.0.0,<11.0
+opencv-contrib-python>=4.8.0,<5.0
+appdirs>=1.4.4,<2.0
+pyqtgraph>=0.13.0,<1.0
+pytest>=8.0.0,<9.0
+pytest-qt>=4.0.0,<5.0
+pytest-cov>=4.0.0,<7.0
+
+# GPU Acceleration (optional - install for your GPU):
+# Cross-platform (Vulkan/Metal/DX12): pip install wgpu
+# NVIDIA CUDA: pip install cupy-cuda12x
+# AMD ROCm:    pip install cupy-rocm-6-0

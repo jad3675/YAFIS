@@ -1,48 +1,43 @@
-# Application entry point
+"""Application entrypoint.
+
+Supported run modes:
+- Recommended: `python -m negative_converter`
+
+Notes:
+- Running as a script (`python negative_converter/main.py`) is intentionally not supported
+  because it breaks Python package imports unless you mutate `sys.path`. Keeping the
+  entrypoint import-clean avoids hiding packaging/import issues.
+"""
+
+from __future__ import annotations
+
 import sys
-import os
+
 from PyQt6.QtWidgets import QApplication
 
-# Ensure the package structure is recognized (dev runs + PyInstaller onefile).
-# In a frozen build, imports should resolve without sys.path hacks.
-if not getattr(sys, "frozen", False):
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    package_dir = os.path.dirname(script_dir)  # repo root (parent of negative_converter/)
-    if package_dir not in sys.path:
-        sys.path.insert(0, package_dir)
-
-# Import settings *before* other components that might use them or the logger
 from negative_converter.config import settings
-from negative_converter.utils.logger import get_logger
+from negative_converter.ui.main_window import MainWindow
+from negative_converter.utils.logger import configure_logging, get_logger
 
 logger = get_logger(__name__)
 
-# Import the MainWindow class from the ui subpackage
-from negative_converter.ui.main_window import MainWindow
 
+def main() -> None:
+    """Run the Qt application."""
 
-def main():
-    """Main function to run the application."""
+    # Configure logging once at process start.
+    configure_logging(settings.LOGGING_LEVEL)
+    logger.info("Logging configured: level=%s", settings.LOGGING_LEVEL)
 
-    # --- Logging ---
-    # The level is determined by 'config.settings.LOGGING_LEVEL'.
-    logger.info("Logging level set to: %s (via config/settings.py)", settings.LOGGING_LEVEL)
-
-    # Create the Qt Application
     app = QApplication(sys.argv)
+    app.setApplicationName("YAFIS")
+    app.setOrganizationName("YAFIS")
 
-    # Optional: Set application details
-    app.setApplicationName("Negative Converter")
-    app.setOrganizationName("ExampleOrg") # Replace if desired
-    # app.setWindowIcon(QIcon("path/to/icon.png")) # Set application icon
-
-    # Create and show the main window
     main_window = MainWindow()
     main_window.show()
 
-    # Start the Qt event loop
-    sys.exit(app.exec())
+    raise SystemExit(app.exec())
+
 
 if __name__ == "__main__":
-    # This block ensures the code runs only when the script is executed directly
     main()
