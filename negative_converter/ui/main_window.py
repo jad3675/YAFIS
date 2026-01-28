@@ -76,6 +76,7 @@ class MainWindow(QMainWindow, FileHandlingMixin, BatchProcessingMixin, ViewManag
         self.initial_converted_image = None
         self.base_image = None
         self._is_converting_initial = False # Flag for initial conversion status
+        self._current_metadata = None  # Store image metadata (EXIF, ICC, etc.)
 
         self.previous_base_image = None
         self.current_file_path = None
@@ -83,6 +84,7 @@ class MainWindow(QMainWindow, FileHandlingMixin, BatchProcessingMixin, ViewManag
         self._request_pending = False
         self._batch_output_dir = None
         self._active_preset_details = None # Stores details of the last *applied* preset for batch
+
 
         # --- Processing Engines ---
         self.negative_converter = NegativeConverter(film_profile="C41")
@@ -428,6 +430,9 @@ class MainWindow(QMainWindow, FileHandlingMixin, BatchProcessingMixin, ViewManag
 
         # Settings Action
         self.settings_action = QAction("&Settings...", self, statusTip="Edit application settings", triggered=self.open_settings_dialog)
+        
+        # Image Info Action
+        self.image_info_action = QAction("Image &Info...", self, statusTip="View image metadata and EXIF information", shortcut="Ctrl+I", triggered=self.show_image_info, enabled=False)
     def create_menus(self):
         """Create the main menu bar."""
         menu_bar = self.menuBar()
@@ -435,6 +440,8 @@ class MainWindow(QMainWindow, FileHandlingMixin, BatchProcessingMixin, ViewManag
         file_menu.addAction(self.open_action)
         file_menu.addAction(self.open_batch_action)
         file_menu.addAction(self.save_as_action)
+        file_menu.addSeparator()
+        file_menu.addAction(self.image_info_action)
         file_menu.addSeparator()
         file_menu.addAction(self.exit_action)
 
@@ -706,6 +713,10 @@ class MainWindow(QMainWindow, FileHandlingMixin, BatchProcessingMixin, ViewManag
         self.adjustment_panel.setEnabled(image_loaded and not is_processing)
         self.film_preset_panel.setEnabled(image_loaded and not is_processing)
         self.photo_preset_panel.setEnabled(image_loaded and not is_processing)
+        
+        # Image info action - enabled when any image is loaded (even during processing)
+        has_any_image = self.raw_loaded_image is not None or self.base_image is not None
+        self.image_info_action.setEnabled(has_any_image)
 
         # Compare wipe slider: enabled only when a before-image exists and not processing.
         has_before = self.image_viewer.has_before_image()
@@ -1207,6 +1218,30 @@ class MainWindow(QMainWindow, FileHandlingMixin, BatchProcessingMixin, ViewManag
         self.update_ui_state() # Disable controls during conversion
         # Emit the signal with the raw image and the override type
         self.initial_conversion_requested.emit(self.raw_loaded_image, override_type)
+
+    # --- Image Info Dialog ---
+    def show_image_info(self):
+        """Show the image information dialog with EXIF and metadata."""
+        if self.current_file_path is None and self.raw_loaded_image is None:
+            QMessageBox.information(self, "No Image", "No image is currently loaded.")
+            return
+        
+        from .image_info_dialog import ImageInfoDialog
+        
+        # Get image shape from raw or base image
+        image_shape = None
+        if self.raw_loaded_image is not None:
+            image_shape = self.raw_loaded_image.shape
+        elif self.base_image is not None:
+            image_shape = self.base_image.shape
+        
+        dialog = ImageInfoDialog(
+            parent=self,
+            metadata=self._current_metadata,
+            file_path=self.current_file_path,
+            image_shape=image_shape,
+        )
+        dialog.exec()
 
     # --- Settings Dialog ---
     def open_settings_dialog(self):

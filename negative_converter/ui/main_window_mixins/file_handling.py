@@ -11,21 +11,25 @@ class FileHandlingMixin:
     
     def open_image(self):
         """Open an image file using a file dialog."""
-        file_filter = "Image Files (*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.webp);;All Files (*)"
-        file_path, _ = QFileDialog.getOpenFileName(self, "Open Negative Image", "", file_filter)
+        # Use the updated filter that includes RAW formats if available
+        from ...io.image_loader import SUPPORTED_FORMATS_FILTER
+        file_path, _ = QFileDialog.getOpenFileName(self, "Open Negative Image", "", SUPPORTED_FORMATS_FILTER)
 
         if file_path:
             self.statusBar().showMessage(f"Loading image: {os.path.basename(file_path)}...")
             QApplication.processEvents() # Allow UI to update
             try:
-                # Store raw loaded image first, unpack all return values
-                self.raw_loaded_image, original_mode, file_size = self.conversion_service.load_image(file_path)
+                # Load image with metadata
+                from ...io.image_loader import load_image
+                self.raw_loaded_image, metadata = load_image(file_path, return_metadata=True)
+                
                 if self.raw_loaded_image is None:
                     raise ValueError("Image loader returned None.")
 
                 self.current_file_path = file_path
-                self._current_file_size = file_size # Use file size returned by loader
-                self._current_original_mode = original_mode
+                self._current_metadata = metadata  # Store metadata for info dialog
+                self._current_file_size = metadata.file_size if metadata else None
+                self._current_original_mode = metadata.original_mode if metadata else None
                 self._current_negative_type = None # Reset detected type
 
                 # Update status bar immediately with file info
@@ -54,6 +58,7 @@ class FileHandlingMixin:
                 self.statusBar().showMessage(f"Error loading image: {e}", 5000)
                 self.raw_loaded_image = None
                 self.current_file_path = None
+                self._current_metadata = None
                 self._is_converting_initial = False
                 QApplication.restoreOverrideCursor()
                 self.update_ui_state()
@@ -101,7 +106,14 @@ class FileHandlingMixin:
                 elif ext in ['.tif', '.tiff']:
                     quality_params['compression'] = 'tiff_lzw'
 
-                success = self.conversion_service.save_image(final_image_to_save, file_path, **quality_params)
+                # Pass metadata for EXIF preservation
+                from ...io.image_saver import save_image
+                success = save_image(
+                    final_image_to_save, file_path,
+                    metadata=self._current_metadata,
+                    preserve_exif=True,
+                    **quality_params
+                )
                 if success:
                     self.statusBar().showMessage(f"Image saved successfully to {file_path}", 5000)
                 else:
@@ -156,12 +168,15 @@ class FileHandlingMixin:
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         
         try:
-            image, original_mode, file_size = self.conversion_service.load_image(file_path)
+            from ...io.image_loader import load_image
+            image, metadata = load_image(file_path, return_metadata=True)
+            
             if image is not None:
                 self.current_file_path = file_path
                 self.raw_loaded_image = image
-                self._current_file_size = file_size
-                self._current_original_mode = original_mode
+                self._current_metadata = metadata
+                self._current_file_size = metadata.file_size if metadata else None
+                self._current_original_mode = metadata.original_mode if metadata else None
                 self._current_negative_type = None
                 
                 self._update_status_filename(file_path)
