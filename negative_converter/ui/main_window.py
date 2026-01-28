@@ -24,6 +24,12 @@ from .filmstrip_widget import BatchFilmstripWidget
 from .settings_dialog import SettingsDialog
 from ..config import settings as app_settings # Import settings to call reload
 
+# Import new UI components
+from .crop_rotate_widget import CropRotateDialog
+from .color_sampler_dialog import ColorSamplerDialog
+from .split_view_widget import SplitViewWidget, CompareState, CompareMode
+from .spot_removal_widget import SpotRemovalDialog
+
 # Import IO and Processing components
 from ..processing.adjustments import apply_all_adjustments
 # Standard imports assuming package structure is respected
@@ -32,6 +38,11 @@ from ..processing import NegativeConverter, FilmPresetManager, PhotoPresetManage
 from ..processing.adjustments import AdvancedAdjustments
 from ..processing.batch import process_batch_with_adjustments
 from ..services.conversion_service import ConversionService, PresetInfo
+
+# Import new utility modules
+from ..utils.history import HistoryStack
+from ..utils.keyboard_shortcuts import ShortcutManager, get_shortcut_manager
+from ..utils.session import SessionManager, get_session_manager
 
 
 from .workers import (ImageProcessingWorker, InitialConversionWorker, 
@@ -92,6 +103,15 @@ class MainWindow(QMainWindow, FileHandlingMixin, BatchProcessingMixin, ViewManag
         self.photo_preset_manager = PhotoPresetManager()
         self.basic_adjuster = ImageAdjustments()
         self.advanced_adjuster = AdvancedAdjustments()
+        
+        # --- History Stack for Multi-level Undo/Redo ---
+        self.history_stack = HistoryStack[dict](max_size=20, deep_copy=True)
+        
+        # --- Session Manager ---
+        self.session_manager = get_session_manager()
+        
+        # --- Shortcut Manager ---
+        self.shortcut_manager = get_shortcut_manager()
 
         # Ensure the adjustment pipeline uses the same preset manager instances as the UI.
         try:
@@ -251,6 +271,9 @@ class MainWindow(QMainWindow, FileHandlingMixin, BatchProcessingMixin, ViewManag
         awb_params = {'temp': 0, 'tint': 0} # Default
 
         try:
+            # Store state before auto adjustment
+            self._store_state_for_undo(f"Auto WB ({method})")
+            
             # Call the correct calculation function based on the method string
             if method == 'gray_world':
                 awb_params = AdvancedAdjustments.calculate_gray_world_awb_params(self.base_image)
@@ -261,13 +284,8 @@ class MainWindow(QMainWindow, FileHandlingMixin, BatchProcessingMixin, ViewManag
                  awb_params = AdvancedAdjustments.calculate_simple_wb_params(self.base_image)
             elif method == 'learning_wb':
                  awb_params = AdvancedAdjustments.calculate_learning_wb_params(self.base_image)
-            # Add Near-White as an option if desired, or keep it internal
-            # elif method == 'near_white':
-            #     awb_params = AdvancedAdjustments.calculate_near_white_awb_params(self.base_image, percentile=1.0)
             else:
                 logger.warning("Unknown AWB method '%s' requested. Using default.", method)
-                # Optionally default to one method, e.g., Near-White or Gray World
-                # awb_params = AdvancedAdjustments.calculate_near_white_awb_params(self.base_image)
 
             # Update adjustment panel, temporarily disconnecting signal
             try:
@@ -281,13 +299,9 @@ class MainWindow(QMainWindow, FileHandlingMixin, BatchProcessingMixin, ViewManag
             self.handle_adjustment_change(self.adjustment_panel._current_adjustments)
             self.statusBar().showMessage(f"Auto White Balance ({method}) calculated", 3000)
 
-        # Add the except block for the main try statement (line 338)
         except Exception as e:
             logger.exception("Auto White Balance calculation failed (method=%s)", method)
             self.statusBar().showMessage(f"Auto White Balance calculation failed: {str(e)}", 5000)
-        # The 'else' block related to the initial 'if self.base_image is None:' check
-        # is already handled by the return statement on line 333.
-        # Remove the misplaced 'else' block entirely.
 
     @pyqtSlot(str, float)
     def handle_auto_level(self, colorspace_mode, midrange):
@@ -295,15 +309,16 @@ class MainWindow(QMainWindow, FileHandlingMixin, BatchProcessingMixin, ViewManag
         # Use base_image (the initially converted image) for calculations
         if self.base_image is not None:
             try:
+                # Store state before auto adjustment
+                self._store_state_for_undo("Auto Levels")
+                
                 # Calculate the level parameters using the base image
                 level_params = AdvancedAdjustments.calculate_auto_levels_params(
                     self.base_image,
-                    colorspace_mode=colorspace_mode, # Pass mode for potential future use in calculation
+                    colorspace_mode=colorspace_mode,
                     midrange=midrange
                 )
 
-                # Update the adjustment panel with the calculated parameters
-                # Note: We only update the relevant level parameters
                 # Update adjustment panel, temporarily disconnecting signal
                 try:
                     self.adjustment_panel.adjustment_changed.disconnect(self.handle_adjustment_change)
@@ -327,13 +342,15 @@ class MainWindow(QMainWindow, FileHandlingMixin, BatchProcessingMixin, ViewManag
         # Use base_image (the initially converted image) for calculations
         if self.base_image is not None:
             try:
+                # Store state before auto adjustment
+                self._store_state_for_undo(f"Auto Color ({method})")
+                
                 # Calculate the temp/tint parameters
                 color_params = AdvancedAdjustments.calculate_auto_color_params(
                     self.base_image,
                     method=method
                 )
 
-                # Update the adjustment panel with the calculated parameters
                 # Update adjustment panel, temporarily disconnecting signal
                 try:
                     self.adjustment_panel.adjustment_changed.disconnect(self.handle_adjustment_change)
@@ -361,6 +378,9 @@ class MainWindow(QMainWindow, FileHandlingMixin, BatchProcessingMixin, ViewManag
             self.statusBar().showMessage("Busy—please wait…", 2000)
             return
 
+        # Store state before auto adjustment
+        self._store_state_for_undo("Auto Tone")
+        
         self._is_auto_tone_running = True
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         self.statusBar().showMessage("Calculating Auto Tone…", 0)
@@ -408,9 +428,17 @@ class MainWindow(QMainWindow, FileHandlingMixin, BatchProcessingMixin, ViewManag
         self.open_batch_action = QAction("Open Folder for &Batch...", self, statusTip="Select a folder of images for batch processing", triggered=self.open_batch_dialog)
         self.exit_action = QAction("E&xit", self, statusTip="Exit the application", shortcut=QKeySequence.StandardKey.Quit, triggered=self.close)
 
-        # Undo Action
-        self.undo_action = QAction("&Undo", self, statusTip="Undo the last destructive operation", shortcut=QKeySequence.StandardKey.Undo, triggered=self.undo_last_destructive_op, enabled=False)
+        # Undo/Redo Actions (multi-level)
+        self.undo_action = QAction("&Undo", self, statusTip="Undo the last operation", shortcut=QKeySequence.StandardKey.Undo, triggered=self.undo_operation, enabled=False)
+        self.redo_action = QAction("&Redo", self, statusTip="Redo the last undone operation", shortcut=QKeySequence.StandardKey.Redo, triggered=self.redo_operation, enabled=False)
+        
         self.compare_action = QAction("&Compare Before/After", self, statusTip="Toggle between original and adjusted view", checkable=True, triggered=self.toggle_compare_view, enabled=False)
+
+        # Tools Actions
+        self.crop_rotate_action = QAction("&Crop && Rotate...", self, statusTip="Crop and rotate the image", shortcut="C", triggered=self.show_crop_rotate_dialog, enabled=False)
+        self.color_sampler_action = QAction("Color &Sampler...", self, statusTip="Sample colors from the image", shortcut="S", triggered=self.show_color_sampler_dialog, enabled=False)
+        self.spot_removal_action = QAction("S&pot Removal...", self, statusTip="Manually paint and remove dust spots", shortcut="P", triggered=self.show_spot_removal_dialog, enabled=False)
+        self.split_view_action = QAction("Split &View Comparison...", self, statusTip="Compare different adjustment states side by side", shortcut="\\", triggered=self.show_split_view, enabled=False)
 
         self.view_adjust_action = self.adjustment_dock.toggleViewAction()
         self.view_adjust_action.setText("Adjustment Panel")
@@ -447,18 +475,27 @@ class MainWindow(QMainWindow, FileHandlingMixin, BatchProcessingMixin, ViewManag
 
         edit_menu = menu_bar.addMenu("&Edit")
         edit_menu.addAction(self.undo_action)
-        edit_menu.addAction(self.compare_action) # Add compare action to Edit menu
+        edit_menu.addAction(self.redo_action)
         edit_menu.addSeparator()
-        edit_menu.addAction(self.settings_action) # Add settings action
+        edit_menu.addAction(self.compare_action)
+        edit_menu.addSeparator()
+        edit_menu.addAction(self.settings_action)
+
+        # Tools Menu
+        tools_menu = menu_bar.addMenu("&Tools")
+        tools_menu.addAction(self.crop_rotate_action)
+        tools_menu.addAction(self.color_sampler_action)
+        tools_menu.addAction(self.spot_removal_action)
+        tools_menu.addSeparator()
+        tools_menu.addAction(self.split_view_action)
 
         view_menu = menu_bar.addMenu("&View")
         view_menu.addAction(self.view_adjust_action)
         view_menu.addAction(self.view_film_preset_action)
         view_menu.addAction(self.view_photo_preset_action)
-        view_menu.addAction(self.view_histogram_action) # Add histogram view action
+        view_menu.addAction(self.view_histogram_action)
         view_menu.addSeparator()
         view_menu.addAction(self.view_filmstrip_action)
-        # Toolbar view actions added in their creation methods
 
     def create_status_bar(self):
         """Creates the status bar and adds permanent widgets for information."""
@@ -709,10 +746,20 @@ class MainWindow(QMainWindow, FileHandlingMixin, BatchProcessingMixin, ViewManag
 
         self.save_as_action.setEnabled(image_loaded and not is_processing)
         self.compare_action.setEnabled(image_loaded and not is_processing)
-        self.undo_action.setEnabled(self.previous_base_image is not None and not is_processing)
+        
+        # Multi-level undo/redo
+        self.undo_action.setEnabled(self.history_stack.can_undo() and not is_processing)
+        self.redo_action.setEnabled(self.history_stack.can_redo() and not is_processing)
+        
         self.adjustment_panel.setEnabled(image_loaded and not is_processing)
         self.film_preset_panel.setEnabled(image_loaded and not is_processing)
         self.photo_preset_panel.setEnabled(image_loaded and not is_processing)
+        
+        # Tools menu actions
+        self.crop_rotate_action.setEnabled(image_loaded and not is_processing)
+        self.color_sampler_action.setEnabled(image_loaded and not is_processing)
+        self.spot_removal_action.setEnabled(image_loaded and not is_processing)
+        self.split_view_action.setEnabled(image_loaded and not is_processing)
         
         # Image info action - enabled when any image is loaded (even during processing)
         has_any_image = self.raw_loaded_image is not None or self.base_image is not None
@@ -913,6 +960,9 @@ class MainWindow(QMainWindow, FileHandlingMixin, BatchProcessingMixin, ViewManag
         self.base_image = converted_image.copy()
         self.previous_base_image = None # Reset undo state for new image
 
+        # Clear history for new image and store initial state
+        self.history_stack.clear()
+
         # Update the image viewer and histogram
         self.image_viewer.set_image(self.base_image)
         self.histogram_widget.update_histogram(self.base_image)
@@ -925,6 +975,9 @@ class MainWindow(QMainWindow, FileHandlingMixin, BatchProcessingMixin, ViewManag
 
         # Reset adjustments panel to defaults for the new image
         self.adjustment_panel.reset_adjustments() # Correct method name
+        
+        # Store initial state in history
+        self._store_state_for_undo("initial")
 
         # Re-enable UI controls
         QApplication.restoreOverrideCursor() # Restore cursor
@@ -963,30 +1016,71 @@ class MainWindow(QMainWindow, FileHandlingMixin, BatchProcessingMixin, ViewManag
 
     # --- Undo/Compare Logic ---
 
-    def _store_previous_state(self):
-        """Stores the current base image for undo."""
+    def _store_state_for_undo(self, description: str = "change"):
+        """Stores the current state (base image + adjustments) in the history stack."""
         if self.base_image is not None:
-            # Store the image *before* the destructive operation
-            # This should be called just before applying presets or other non-reversible ops
-            logger.debug("Storing state for undo.")
-            self.previous_base_image = self.base_image.copy()
-            self.update_ui_state() # Enable undo action
+            state = {
+                'base_image': self.base_image.copy(),
+                'adjustments': self.adjustment_panel.get_adjustments().copy()
+            }
+            logger.debug("Storing state in history stack: %s", description)
+            self.history_stack.push(state, description)
+            self.update_ui_state()
 
+    def _store_previous_state(self):
+        """Stores the current base image before destructive operations."""
+        self._store_state_for_undo("destructive operation")
 
-    def undo_last_destructive_op(self):
-        """Reverts to the previously stored base image."""
-        if self.previous_base_image is not None:
+    def undo_operation(self):
+        """Undo to the previous state using the history stack."""
+        if self.history_stack.can_undo():
             logger.debug("Performing undo.")
-            self.base_image = self.previous_base_image.copy()
-            self.previous_base_image = None # Can only undo once per stored state
-            # Reset adjustments and update viewer
-            self.adjustment_panel.reset_adjustments() # Reset sliders to default
-            self.image_viewer.set_image(self.base_image)
-            self.histogram_widget.update_histogram(self.base_image)
-            self.statusBar().showMessage("Undo successful.", 2000)
-            self.update_ui_state() # Disable undo action
+            previous_state = self.history_stack.undo()
+            if previous_state is not None:
+                self.base_image = previous_state['base_image'].copy()
+                
+                # Restore adjustments without triggering reprocessing
+                try:
+                    self.adjustment_panel.adjustment_changed.disconnect(self.handle_adjustment_change)
+                except TypeError:
+                    pass
+                self.adjustment_panel.set_adjustments(previous_state['adjustments'])
+                self.adjustment_panel.adjustment_changed.connect(self.handle_adjustment_change)
+                
+                # Reprocess with restored adjustments
+                self.request_processing(previous_state['adjustments'])
+                self.statusBar().showMessage(f"Undo successful. ({self.history_stack.get_undo_count()} more available)", 2000)
+            self.update_ui_state()
         else:
             self.statusBar().showMessage("Nothing to undo.", 2000)
+
+    def redo_operation(self):
+        """Redo to the next state using the history stack."""
+        if self.history_stack.can_redo():
+            logger.debug("Performing redo.")
+            next_state = self.history_stack.redo()
+            if next_state is not None:
+                self.base_image = next_state['base_image'].copy()
+                
+                # Restore adjustments without triggering reprocessing
+                try:
+                    self.adjustment_panel.adjustment_changed.disconnect(self.handle_adjustment_change)
+                except TypeError:
+                    pass
+                self.adjustment_panel.set_adjustments(next_state['adjustments'])
+                self.adjustment_panel.adjustment_changed.connect(self.handle_adjustment_change)
+                
+                # Reprocess with restored adjustments
+                self.request_processing(next_state['adjustments'])
+                self.statusBar().showMessage(f"Redo successful. ({self.history_stack.get_redo_count()} more available)", 2000)
+            self.update_ui_state()
+        else:
+            self.statusBar().showMessage("Nothing to redo.", 2000)
+
+    # Keep old method for backward compatibility
+    def undo_last_destructive_op(self):
+        """Alias for undo_operation for backward compatibility."""
+        self.undo_operation()
 
 
 
@@ -1002,48 +1096,6 @@ class MainWindow(QMainWindow, FileHandlingMixin, BatchProcessingMixin, ViewManag
         else:
             self.statusBar().showMessage("Load an image before using the White Balance picker.", 3000)
 
-    @pyqtSlot(tuple)
-    def handle_color_sampled(self, rgb_tuple):
-        """Receives the sampled color from the viewer and passes it to the adjustment panel."""
-        if rgb_tuple:
-            logger.debug("Color sampled: %s", rgb_tuple)
-            r, g, b = rgb_tuple
-
-            # Avoid issues if sampled color is pure black (unlikely neutral)
-            if r == 0 and g == 0 and b == 0:
-                self.statusBar().showMessage("Cannot set WB from black sample.", 3000)
-                return
-
-            # --- Calculate approximate Temp/Tint slider values ---
-            # These factors (0.6, 0.3) are derived empirically from how adjust_temp_tint works
-            # It maps a slider range of -100 to 100 to roughly +/- 30 units of RGB change.
-            # We want to reverse this: find the slider value that would neutralize the difference.
-            # Temp: Balances Blue vs Red. If B > R, need negative temp (cooler).
-            # Tint: Balances Green vs Magenta (Avg(R,B)). If G > Avg(R,B), need negative tint (more magenta).
-
-            # Calculate raw differences
-            temp_diff = b - r
-            tint_diff = g - (r + b) / 2.0
-
-            # Estimate slider values needed to counteract the difference
-            # Note the sign inversion: if B > R (temp_diff > 0), we need negative temp slider value
-            temp_slider_val = -temp_diff / 0.6 # Divide by the approximate effect per slider unit
-            tint_slider_val = -tint_diff / 0.3 # Divide by the approximate effect per slider unit
-
-            # Clamp values to slider range [-100, 100] and round
-            temp_slider_val = int(round(np.clip(temp_slider_val, -100, 100)))
-            tint_slider_val = int(round(np.clip(tint_slider_val, -100, 100)))
-
-            logger.debug("Calculated WB adjustments: Temp=%s, Tint=%s", temp_slider_val, tint_slider_val)
-
-            # Apply the calculated adjustments to the panel
-            # Apply the calculated adjustments to the panel and trigger update
-            adj_dict = {'temp': temp_slider_val, 'tint': tint_slider_val}
-            self.adjustment_panel.set_adjustments(adj_dict)
-            self.adjustment_panel.adjustment_changed.emit(self.adjustment_panel._current_adjustments)
-            self.statusBar().showMessage(f"White balance adjusted based on sampled color {rgb_tuple}.", 3000)
-        else: # Sampling cancelled
-            self.statusBar().showMessage("White Balance picker cancelled.", 2000)
 
 
     # --- Preset Handling ---
@@ -1264,6 +1316,171 @@ class MainWindow(QMainWindow, FileHandlingMixin, BatchProcessingMixin, ViewManag
             # Settings dialog was cancelled
             logger.info("Settings dialog cancelled.")
             self.statusBar().showMessage("Settings changes cancelled.", 3000)
+
+    # --- Tool Dialogs ---
+    
+    def show_crop_rotate_dialog(self):
+        """Show the crop and rotate dialog."""
+        if self.base_image is None:
+            QMessageBox.warning(self, "No Image", "Please load an image first.")
+            return
+        
+        dialog = CropRotateDialog(self.base_image, parent=self)
+        if dialog.exec():
+            result = dialog.get_result()
+            if result is not None:
+                self._store_previous_state()
+                self.base_image = result
+                self.adjustment_panel.reset_adjustments()
+                self.image_viewer.set_image(self.base_image)
+                self.histogram_widget.update_histogram(self.base_image)
+                self.statusBar().showMessage("Crop/rotate applied.", 3000)
+                self.update_ui_state()
+    
+    def show_color_sampler_dialog(self):
+        """Show the color sampler dialog."""
+        if self.base_image is None:
+            QMessageBox.warning(self, "No Image", "Please load an image first.")
+            return
+        
+        self._color_sampler_dialog = ColorSamplerDialog(parent=self)
+        
+        # Connect the sample request to trigger picker mode
+        self._color_sampler_dialog.sample_requested.connect(self._on_color_sample_requested)
+        
+        # Connect the WB correction signal
+        self._color_sampler_dialog.apply_wb_correction.connect(self._apply_wb_from_sampler)
+        
+        # Show as non-modal so user can interact with image
+        self._color_sampler_dialog.setModal(False)
+        self._color_sampler_dialog.show()
+    
+    def _apply_wb_from_sampler(self, temp: int, tint: int):
+        """Apply white balance correction from the color sampler."""
+        # Store state before applying
+        self._store_state_for_undo("WB correction")
+        
+        adj_dict = {'temp': temp, 'tint': tint}
+        self.adjustment_panel.set_adjustments(adj_dict)
+        self.adjustment_panel.adjustment_changed.emit(self.adjustment_panel._current_adjustments)
+        self.statusBar().showMessage(f"Applied WB correction: Temp {temp:+d}, Tint {tint:+d}", 3000)
+    
+    def _on_color_sample_requested(self):
+        """Handle request to sample a color from the image."""
+        if self.base_image is None:
+            return
+        
+        self.statusBar().showMessage("Click on the image to sample a color...", 0)
+        
+        # Store reference to handle the sampled color
+        self._sampling_for_dialog = True
+        
+        # Enter picker mode on the image viewer
+        self.image_viewer.enter_picker_mode()
+    
+    @pyqtSlot(tuple)
+    def handle_color_sampled(self, rgb_tuple):
+        """Receives the sampled color from the viewer."""
+        if rgb_tuple:
+            logger.debug("Color sampled: %s", rgb_tuple)
+            
+            # Check if we're sampling for the color sampler dialog
+            if getattr(self, '_sampling_for_dialog', False) and hasattr(self, '_color_sampler_dialog'):
+                self._sampling_for_dialog = False
+                if self._color_sampler_dialog and self._color_sampler_dialog.isVisible():
+                    from ..utils.color_sampler import ColorSample
+                    # Create a sample (we don't have exact x,y from the viewer, use 0,0)
+                    sample = ColorSample(0, 0, rgb_tuple)
+                    self._color_sampler_dialog.add_sample(sample)
+                    self.statusBar().showMessage(f"Sampled color: RGB{rgb_tuple}", 3000)
+                    return
+            
+            # Original WB picker logic
+            r, g, b = rgb_tuple
+
+            # Avoid issues if sampled color is pure black (unlikely neutral)
+            if r == 0 and g == 0 and b == 0:
+                self.statusBar().showMessage("Cannot set WB from black sample.", 3000)
+                return
+
+            # --- Calculate approximate Temp/Tint slider values ---
+            temp_diff = b - r
+            tint_diff = g - (r + b) / 2.0
+
+            temp_slider_val = -temp_diff / 0.6
+            tint_slider_val = -tint_diff / 0.3
+
+            temp_slider_val = int(round(np.clip(temp_slider_val, -100, 100)))
+            tint_slider_val = int(round(np.clip(tint_slider_val, -100, 100)))
+
+            logger.debug("Calculated WB adjustments: Temp=%s, Tint=%s", temp_slider_val, tint_slider_val)
+
+            adj_dict = {'temp': temp_slider_val, 'tint': tint_slider_val}
+            self.adjustment_panel.set_adjustments(adj_dict)
+            self.adjustment_panel.adjustment_changed.emit(self.adjustment_panel._current_adjustments)
+            self.statusBar().showMessage(f"White balance adjusted based on sampled color {rgb_tuple}.", 3000)
+        else:
+            self._sampling_for_dialog = False
+            self.statusBar().showMessage("Color sampling cancelled.", 2000)
+    
+    def show_split_view(self):
+        """Show the split view comparison dialog."""
+        if self.base_image is None:
+            QMessageBox.warning(self, "No Image", "Please load an image first.")
+            return
+        
+        # Create comparison states
+        states = []
+        
+        # Add "Before" state (initial converted image)
+        if self.initial_converted_image is not None:
+            states.append(CompareState("Before (Original)", self.initial_converted_image))
+        
+        # Add "Current" state (with current adjustments)
+        current_adjustments = self.adjustment_panel.get_adjustments()
+        current_image = self._get_fully_adjusted_image(self.base_image, current_adjustments)
+        if current_image is not None:
+            states.append(CompareState("After (Current)", current_image, current_adjustments))
+        
+        if len(states) < 2:
+            QMessageBox.information(self, "Split View", "Need at least two states to compare.")
+            return
+        
+        dialog = SplitViewWidget(states, parent=self)
+        dialog.exec()
+
+    def show_spot_removal_dialog(self):
+        """Show the spot removal / healing brush dialog."""
+        if self.base_image is None:
+            QMessageBox.warning(self, "No Image", "Please load an image first.")
+            return
+        
+        # Get the current displayed image (with adjustments applied)
+        current_adjustments = self.adjustment_panel.get_adjustments()
+        display_image = self._get_fully_adjusted_image(self.base_image, current_adjustments)
+        
+        if display_image is None:
+            display_image = self.base_image
+        
+        dialog = SpotRemovalDialog(display_image, parent=self)
+        
+        if dialog.exec():
+            result = dialog.get_result()
+            if result is not None:
+                # Store state for undo
+                self._store_state_for_undo("Spot Removal")
+                
+                # Update the base image with the fixed result
+                self.base_image = result
+                
+                # Reset adjustments since we applied them to the result
+                self.adjustment_panel.reset_adjustments()
+                
+                # Update display
+                self.image_viewer.set_image(self.base_image)
+                self.histogram_widget.update_histogram(self.base_image)
+                self.statusBar().showMessage("Spot removal applied.", 3000)
+                self.update_ui_state()
 
 
 # (entrypoint moved to [`negative_converter.main.main()`](negative_converter/main.py:22))

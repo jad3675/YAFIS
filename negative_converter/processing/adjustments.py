@@ -192,42 +192,43 @@ class AdvancedAdjustments:
             else:
                 raise TypeError("Cannot convert non-GPU array using cp.asnumpy")
 
-
-        # Define the default identity curve for comparison
-        identity_curve = [[0, 0], [255, 255]]
+        def is_identity_curve(curve):
+            """Check if a curve is effectively the identity curve (no change)."""
+            if curve is None:
+                return True
+            if not isinstance(curve, list) or len(curve) < 2:
+                return True
+            # Check if it's exactly [[0, 0], [255, 255]]
+            if len(curve) == 2:
+                p0, p1 = curve[0], curve[1]
+                if (p0[0] == 0 and p0[1] == 0 and p1[0] == 255 and p1[1] == 255):
+                    return True
+            # For curves with more points, check if all points lie on the identity line (y = x)
+            for p in curve:
+                if abs(p[0] - p[1]) > 1:  # Allow small tolerance
+                    return False
+            return True
 
         # Determine which curve to apply for each channel
         # Prioritize specific channel curve only if it's not None AND not the identity curve.
         # Otherwise, use the RGB curve if it's not None AND not the identity curve.
         r_curve_to_apply = None
-        if curve_points_r and curve_points_r != identity_curve:
+        if not is_identity_curve(curve_points_r):
             r_curve_to_apply = curve_points_r
-            r_curve_source = "Specific"
-        elif curve_points_rgb and curve_points_rgb != identity_curve:
+        elif not is_identity_curve(curve_points_rgb):
             r_curve_to_apply = curve_points_rgb
-            r_curve_source = "RGB"
-        else:
-            r_curve_source = "None" # No curve applied (or identity)
 
         g_curve_to_apply = None
-        if curve_points_g and curve_points_g != identity_curve:
+        if not is_identity_curve(curve_points_g):
             g_curve_to_apply = curve_points_g
-            g_curve_source = "Specific"
-        elif curve_points_rgb and curve_points_rgb != identity_curve:
+        elif not is_identity_curve(curve_points_rgb):
             g_curve_to_apply = curve_points_rgb
-            g_curve_source = "RGB"
-        else:
-            g_curve_source = "None"
 
         b_curve_to_apply = None
-        if curve_points_b and curve_points_b != identity_curve:
+        if not is_identity_curve(curve_points_b):
             b_curve_to_apply = curve_points_b
-            b_curve_source = "Specific"
-        elif curve_points_rgb and curve_points_rgb != identity_curve:
+        elif not is_identity_curve(curve_points_rgb):
             b_curve_to_apply = curve_points_rgb
-            b_curve_source = "RGB"
-        else:
-            b_curve_source = "None"
 
         # Apply the determined curve for each channel, with error handling
         try:

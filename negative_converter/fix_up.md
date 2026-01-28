@@ -1,136 +1,192 @@
-# YAFIS - Issues Addressed
+# YAFIS Codebase Improvements
 
-This document tracks the top 5 issues that were identified and fixed in the codebase.
+## All Improvements Completed ✅
 
-## ✅ 1. EXIF/Metadata Preservation (FIXED)
+### Phase 1: Core Issues
 
-**Problem:** The image saver lost EXIF metadata when saving images.
+1. **EXIF/Metadata Preservation** ✅
+   - `ImageMetadata` class in `io/image_loader.py`
+   - `load_image()` with `return_metadata=True` parameter
+   - `save_image()` preserves EXIF data in JPEG/PNG/TIFF/WebP
+   - ICC profile preservation
 
-**Solution:** 
-- Added `ImageMetadata` class in `io/image_loader.py` to capture and store EXIF data
-- Updated `load_image()` to extract and return metadata via `return_metadata=True` parameter
-- Updated `save_image()` to accept metadata and preserve EXIF in JPEG, PNG, TIFF, and WebP outputs
-- Added `copy_metadata()` utility function for post-hoc metadata copying
+2. **RAW File Support** ✅
+   - Optional `rawpy` integration (DNG, CR2, CR3, NEF, ARW, ORF, RW2, PEF, RAF, SRW)
+   - Graceful degradation when rawpy not installed
 
-**Files changed:**
-- `negative_converter/io/image_loader.py`
-- `negative_converter/io/image_saver.py`
-- `negative_converter/io/__init__.py`
+3. **Centralized Error Handling** ✅
+   - `utils/errors.py` with custom exceptions and decorators
+   - `@handle_errors`, `@handle_gpu_errors`, `safe_operation` context manager
 
----
+4. **Test Coverage** ✅
+   - Comprehensive test suite with 256 tests
 
-## ✅ 2. RAW File Support (FIXED)
+5. **Large File Memory Management** ✅
+   - `utils/image_proxy.py` with proxy creation and tiled processing
 
-**Problem:** No support for RAW file formats (DNG, CR2, NEF, etc.).
+### Phase 2: User Experience
 
-**Solution:**
-- Added optional `rawpy` dependency for RAW file loading
-- Implemented `load_raw_image()` function with sensible defaults for film scanning
-- Updated `SUPPORTED_FORMATS_FILTER` to include RAW extensions when rawpy is available
-- Added `is_raw_file()` and `is_raw_supported()` utility functions
-- Defined `RAW_EXTENSIONS` set for easy format detection
+6. **Image Info Dialog** ✅
+   - `ui/image_info_dialog.py` - EXIF, file info, technical details
+   - File menu → Image Info (Ctrl+I)
 
-**Files changed:**
-- `negative_converter/io/image_loader.py`
-- `negative_converter/io/__init__.py`
-- `negative_converter/requirements.txt`
+7. **Multi-Level Undo/Redo Stack** ✅
+   - `utils/history.py` with `HistoryStack` and `ImageHistoryStack`
+   - Edit menu → Undo (Ctrl+Z), Redo (Ctrl+Y)
+   - Up to 20 levels of undo
 
----
+8. **Keyboard Shortcuts System** ✅
+   - `utils/keyboard_shortcuts.py` with `ShortcutManager`
+   - Conflict detection, customizable shortcuts
 
-## ✅ 3. Centralized Error Handling (FIXED)
+9. **Crop & Rotate Tools** ✅
+   - `utils/geometry.py` - crop, rotate, flip, straighten
+   - `ui/crop_rotate_widget.py` - UI dialog
+   - Tools menu → Crop & Rotate (C)
 
-**Problem:** Inconsistent error handling patterns (50+ `except Exception` blocks with varying approaches).
+10. **Export Presets** ✅
+    - `utils/export_presets.py` with `ExportPreset` and `ExportPresetManager`
+    - Default presets: High Quality JPEG, Web, Lossless PNG, Archive TIFF, Social Media
 
-**Solution:**
-- Created `negative_converter/utils/errors.py` with:
-  - `ErrorCategory` enum for categorizing errors
-  - `AppError` base exception with category, original error, and user message
-  - Specific error types: `FileIOError`, `ProcessingError`, `GPUError`, `ConfigurationError`
-  - `@handle_errors` decorator for consistent error handling with fallback values
-  - `@handle_gpu_errors` decorator specifically for GPU operations with CPU fallback
-  - `safe_operation()` context manager for suppressing non-critical errors
-  - `format_user_error()` for user-friendly error messages
-  - `log_and_continue()` for logging non-critical errors
+### Phase 3: Advanced Features
 
-**Files changed:**
-- `negative_converter/utils/errors.py` (new)
-- `negative_converter/utils/__init__.py`
+11. **Color Sampler Tool** ✅
+    - `utils/color_sampler.py` - RGB, HSV, HSL, LAB conversions
+    - `ui/color_sampler_dialog.py` - UI dialog
+    - Tools menu → Color Sampler (S)
 
----
+12. **Session Persistence** ✅
+    - `utils/session.py` - save/restore images, adjustments, window state
+    - Auto-save support, multiple session management
 
-## ✅ 4. Test Coverage (FIXED)
+13. **Preset Validation** ✅
+    - `utils/preset_validator.py` - JSON schema validation
+    - Type checking, range validation, error/warning severity
 
-**Problem:** Missing tests for adjustment pipeline, presets, GPU paths, and edge cases.
+14. **Split View Comparison** ✅
+    - `ui/split_view_widget.py` - side-by-side, split, overlay modes
+    - Tools menu → Split View Comparison (\\)
 
-**Solution:**
-- Added `tests/test_apply_all_adjustments.py` with 28 tests covering:
-  - Basic adjustments (brightness, contrast, saturation, etc.)
-  - Channel mixer
-  - HSL adjustments
-  - Curves
-  - Selective color
-  - Noise reduction
-  - Dust removal
-  - Edge cases (small images, extreme values)
+15. **Dust & Scratch Detection** ✅ (Enhanced)
+    - `processing/dust_detection.py` - advanced artifact detection
+    - Local contrast analysis (not just global thresholds)
+    - Multi-scale detection using Gaussian pyramids
+    - Color channel correlation analysis (dust affects all channels similarly)
+    - Texture-aware confidence scoring (boost confidence in smooth areas)
+    - Improved scratch detection with directional morphology
+    - Scratch merging to remove duplicates
+    - Feathered masks for smoother blending
+    - Patch-based inpainting option with texture matching
+    - Film grain preservation during inpainting
+    - Auto-adjusted inpaint radius based on artifact size
+    - `auto_clean_image()` - main entry point for automatic cleaning
+    - `preview_detection()` - shows detected artifacts before removal
+    - Adjustments panel → Dust Removal (sensitivity + radius controls)
 
-- Added `tests/test_presets.py` with 16 tests covering:
-  - FilmPresetManager initialization and preset loading
-  - PhotoPresetManager initialization and preset loading
-  - Preset file validation
-  - Preset application with intensity
+16. **Spot Removal / Healing Brush Tool** ✅ (NEW)
+    - `ui/spot_removal_widget.py` - interactive spot removal
+    - Paint over dust spots with adjustable brush size
+    - Semi-transparent overlay shows painted areas
+    - Multiple inpainting methods: Telea, Navier-Stokes, Patch Match
+    - Auto-detection shows suggested spots (accept/reject)
+    - Eraser mode to remove painted areas
+    - Zoom and pan with mouse wheel and middle-click
+    - Keyboard shortcuts: [ / ] for brush size, E for eraser, Ctrl+Z for undo
+    - Preview before applying
+    - Film grain preservation option
+    - Tools menu → Spot Removal (P)
 
-- Added `tests/test_io.py` with 20 tests covering:
-  - Image loading (including error cases)
-  - Image saving (all formats)
-  - Metadata handling
-  - Roundtrip preservation
+17. **Batch Queue with Per-Image Settings** ✅
+    - `processing/batch_queue.py` - individual settings per image
+    - Global/local settings merge, skip items, status tracking
 
-- Added `tests/test_error_handling.py` with 28 tests covering:
-  - All error types
-  - Decorators
-  - Context managers
-  - User error formatting
+18. **Lazy Thumbnail Generation** ✅
+    - `ui/lazy_filmstrip.py` - on-demand loading with LRU cache
+    - Background worker threads, priority queue
 
-- Added `tests/test_image_proxy.py` with 26 tests covering:
-  - Proxy creation and upscaling
-  - Memory estimation
-  - Tiled processing
+19. **Background Preset Preview Caching** ✅
+    - `ui/preset_preview_cache.py` - pre-render preset previews
+    - Memory-efficient caching, invalidation support
 
-**Total new tests: 118** (bringing total from 60 to 178)
+20. **GPU Pipeline for Full Resolution** ✅
+    - `utils/gpu_pipeline.py` - staged processing pipeline
+    - CPU fallback, tiled processing for large images
 
-**Files changed:**
-- `tests/test_apply_all_adjustments.py` (new)
-- `tests/test_presets.py` (new)
-- `tests/test_io.py` (new)
-- `tests/test_error_handling.py` (new)
-- `tests/test_image_proxy.py` (new)
+21. **Enhanced Logging** ✅
+    - `utils/logger.py` - per-module log levels, `log_once()` utility
 
----
+22. **Redesigned Adjustment Panel UI** ✅ (NEW)
+    - `ui/adjustment_panel.py` - completely redesigned
+    - **Tabbed Interface**: Basic | Advanced | Color tabs for better organization
+    - **Visual Indicators**: Green dots show which sections have active adjustments
+    - **Compact Mode**: Toggle to show only essential controls
+    - **Better Tooltips**: Every control has descriptive tooltips explaining what it does
+    - **Collapsible Sections**: Click headers to expand/collapse sections
+    - **Per-Section Reset**: Reset button appears when section has changes
+    - **Scroll Support**: Panel scrolls when content exceeds window height
+    - **Cleaner Layout**: Reduced visual clutter, better spacing
 
-## ✅ 5. Large File Memory Management (FIXED)
+## UI Integration Complete ✅
 
-**Problem:** No proxy/preview system for high-resolution scans, risking memory issues.
+All features are now accessible from the main window:
 
-**Solution:**
-- Created `negative_converter/utils/image_proxy.py` with:
-  - `ImageProxyInfo` dataclass for tracking proxy metadata
-  - `create_proxy()` for automatic downscaling based on pixel count
-  - `upscale_to_original()` for restoring full resolution
-  - `process_with_proxy()` for transparent proxy handling in processing functions
-  - `TiledProcessor` class for processing very large images in tiles with seamless blending
-  - `should_use_proxy()`, `is_large_image()`, `calculate_scale_factor()` utilities
-  - `get_memory_warning_message()` for user warnings on large files
-  - Configurable thresholds: `DEFAULT_PREVIEW_MAX_PIXELS`, `DEFAULT_PROCESSING_MAX_PIXELS`, `DEFAULT_WARNING_THRESHOLD_PIXELS`
+### File Menu
+- Open Negative... (Ctrl+O)
+- Open Folder for Batch...
+- Save Positive As... (Ctrl+Shift+S)
+- Image Info... (Ctrl+I) ← NEW
 
-**Files changed:**
-- `negative_converter/utils/image_proxy.py` (new)
+### Edit Menu
+- Undo (Ctrl+Z) ← Multi-level
+- Redo (Ctrl+Y) ← NEW
+- Compare Before/After
+- Settings...
 
----
+### Tools Menu ← NEW
+- Crop & Rotate... (C)
+- Color Sampler... (S)
+- Spot Removal... (P) ← NEW
+- Split View Comparison... (\\)
 
-## Summary
+### View Menu
+- Adjustment Panel
+- Film Simulation Panel
+- Photo Style Panel
+- Histogram Panel
+- Batch Filmstrip
 
-All 5 identified issues have been addressed with:
-- 5 new modules/files
-- 118 new tests (178 total, all passing)
-- Backward-compatible API changes
-- Optional dependencies (rawpy) that gracefully degrade when not installed
+## New Files Created
+
+```
+negative_converter/utils/
+├── history.py           # Undo/redo stack
+├── keyboard_shortcuts.py # Shortcut management
+├── geometry.py          # Crop, rotate, flip
+├── color_sampler.py     # Color sampling/analysis
+├── preset_validator.py  # JSON preset validation
+├── export_presets.py    # Export preset management
+├── session.py           # Session persistence
+└── gpu_pipeline.py      # GPU processing pipeline
+
+negative_converter/ui/
+├── image_info_dialog.py    # EXIF/metadata dialog
+├── crop_rotate_widget.py   # Crop/rotate dialog
+├── color_sampler_dialog.py # Color sampler dialog
+├── spot_removal_widget.py  # Spot removal / healing brush ← NEW
+├── split_view_widget.py    # Split view comparison
+├── lazy_filmstrip.py       # Lazy loading filmstrip
+└── preset_preview_cache.py # Preset preview caching
+
+negative_converter/processing/
+├── dust_detection.py    # Dust/scratch detection
+└── batch_queue.py       # Batch queue with settings
+
+tests/
+├── test_new_utilities.py    # 44 tests for utilities
+└── test_advanced_features.py # 34 tests for advanced features
+```
+
+## Test Summary
+
+- **Total Tests**: 256
+- **All Passing**: ✅
