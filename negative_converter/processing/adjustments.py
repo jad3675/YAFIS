@@ -1431,6 +1431,170 @@ class AdvancedAdjustments:
             return {'temp': 0, 'tint': 0}
 
 
+    # --- Auto Contrast ---
+    @staticmethod
+    def calculate_auto_contrast_params(image, clip_percent=0.5):
+        """
+        Calculates automatic contrast adjustment by analyzing histogram distribution.
+        Uses histogram stretching with clipping to avoid outlier influence.
+        
+        Args:
+            image: Input RGB uint8 image
+            clip_percent: Percentage of pixels to clip from each end (0.1-5.0 recommended)
+            
+        Returns:
+            dict with 'contrast' value (-100 to 100)
+        """
+        if image is None or image.size == 0:
+            return {'contrast': 0}
+        
+        clip_percent = np.clip(clip_percent, 0.1, 10.0)
+        
+        try:
+            # Convert to grayscale for analysis
+            gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+            
+            # Calculate histogram
+            hist = cv2.calcHist([gray], [0], None, [256], [0, 256]).flatten()
+            total_pixels = gray.size
+            
+            # Find clipping points (more aggressive - use smaller clip percent)
+            clip_pixels = int(total_pixels * clip_percent / 100.0)
+            
+            # Find low clip point
+            cumsum = 0
+            low_clip = 0
+            for i in range(256):
+                cumsum += hist[i]
+                if cumsum >= clip_pixels:
+                    low_clip = i
+                    break
+            
+            # Find high clip point
+            cumsum = 0
+            high_clip = 255
+            for i in range(255, -1, -1):
+                cumsum += hist[i]
+                if cumsum >= clip_pixels:
+                    high_clip = i
+                    break
+            
+            # Calculate current dynamic range
+            current_range = high_clip - low_clip
+            
+            # Also analyze standard deviation for contrast assessment
+            std_dev = np.std(gray)
+            
+            # Ideal range is 0-255 (256 levels)
+            ideal_range = 255
+            
+            if current_range < 10:
+                # Very low contrast image - needs significant boost
+                contrast = 60
+            elif current_range >= ideal_range * 0.98:
+                # Already using almost all the range - but check std dev
+                # Low std dev means flat histogram even with full range
+                if std_dev < 50:
+                    contrast = 25  # Still boost a bit for punch
+                else:
+                    contrast = 10  # Minimal boost for already good images
+            else:
+                # Calculate contrast boost needed
+                # Map range ratio to contrast value - more aggressive
+                range_ratio = current_range / ideal_range
+                # Lower ratio = needs more contrast
+                # range_ratio of 0.5 -> contrast ~50
+                # range_ratio of 0.8 -> contrast ~25
+                contrast = int((1.0 - range_ratio) * 80 + 10)  # +10 minimum
+                contrast = np.clip(contrast, 15, 80)
+            
+            logger.debug(
+                "Auto Contrast: low_clip=%d, high_clip=%d, range=%d, std=%.1f, contrast=%d",
+                low_clip, high_clip, current_range, std_dev, contrast
+            )
+            
+            return {'contrast': int(contrast)}
+            
+        except Exception:
+            logger.exception("Auto Contrast calculation failed.")
+            return {'contrast': 15}  # Return a small boost on error
+
+    # --- Auto Vibrance ---
+    @staticmethod
+    def calculate_auto_vibrance_params(image, target_saturation=0.50):
+        """
+        Calculates automatic vibrance adjustment by analyzing color saturation distribution.
+        Boosts muted colors while protecting already-saturated areas.
+        
+        Args:
+            image: Input RGB uint8 image
+            target_saturation: Target average saturation level (0.3-0.6 recommended)
+            
+        Returns:
+            dict with 'vibrance' value (-100 to 100)
+        """
+        if image is None or image.size == 0:
+            return {'vibrance': 0}
+        
+        target_saturation = np.clip(target_saturation, 0.1, 0.8)
+        
+        try:
+            # Convert to HSV for saturation analysis
+            hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
+            saturation = hsv[:, :, 1].astype(np.float32) / 255.0
+            value = hsv[:, :, 2].astype(np.float32) / 255.0
+            
+            # Exclude very dark and very bright pixels (they skew saturation stats)
+            valid_mask = (value > 0.1) & (value < 0.95)
+            
+            if not np.any(valid_mask):
+                return {'vibrance': 15}  # Default small boost
+            
+            valid_saturation = saturation[valid_mask]
+            
+            # Calculate saturation statistics
+            mean_sat = np.mean(valid_saturation)
+            median_sat = np.median(valid_saturation)
+            
+            # Also look at the lower quartile - these are the muted colors we want to boost
+            low_quartile = np.percentile(valid_saturation, 25)
+            
+            # Use a weighted combination - emphasize muted colors
+            current_sat = (median_sat * 0.6 + low_quartile * 0.4)
+            
+            # Calculate how much boost is needed - more aggressive
+            if current_sat < 0.05:
+                # Very desaturated - might be intentionally B&W or very muted
+                vibrance = 25
+            elif current_sat >= target_saturation * 0.9:
+                # Already close to target - still give a small boost
+                vibrance = 15
+            else:
+                # Calculate vibrance boost - more aggressive formula
+                sat_deficit = target_saturation - current_sat
+                # Map deficit to vibrance (0.2 deficit -> ~50 vibrance)
+                vibrance = int(sat_deficit * 250 + 15)  # +15 minimum
+                vibrance = np.clip(vibrance, 20, 70)
+            
+            # Check for oversaturated areas - reduce boost if many pixels are already saturated
+            oversaturated_ratio = np.sum(valid_saturation > 0.75) / len(valid_saturation)
+            if oversaturated_ratio > 0.3:
+                # Many saturated pixels - reduce boost to avoid clipping
+                reduction = (oversaturated_ratio - 0.3) * 0.5  # Gentler reduction
+                vibrance = int(vibrance * (1.0 - reduction))
+                vibrance = max(vibrance, 10)  # Always at least 10
+            
+            logger.debug(
+                "Auto Vibrance: mean_sat=%.2f, median_sat=%.2f, low_q=%.2f, oversaturated=%.1f%%, vibrance=%d",
+                mean_sat, median_sat, low_quartile, oversaturated_ratio * 100, vibrance
+            )
+            
+            return {'vibrance': int(vibrance)}
+            
+        except Exception:
+            logger.exception("Auto Vibrance calculation failed.")
+            return {'vibrance': 15}  # Return small boost on error
+
     # --- Auto Tone ---
     @staticmethod
     def calculate_auto_tone_params(image, nr_strength=5, awb_method='gray_world', al_mode='luminance', al_midrange=0.5, clarity_strength=10):
@@ -1908,8 +2072,26 @@ def apply_all_adjustments(image, adjustments_dict):
             if not check_img("Noise Reduction"): return None
             logger.debug("Pipeline Step: Noise Reduction Done.")
 
-    # Add other adjustments here in the desired order...
-    # e.g., Vignette, Grain (Grain might be better applied last or handled by preset logic)
+    # 9. Clarity (local contrast enhancement)
+    clarity = adjustments_dict.get('clarity', 0)
+    if clarity != 0:
+        logger.debug("Pipeline Step: Clarity...")
+        current_image = advanced_adjuster.adjust_clarity(current_image, clarity)
+        if not check_img("Clarity"): return None
+        logger.debug("Pipeline Step: Clarity Done.")
+
+    # 10. Vignette (applied last before final output)
+    vignette_amount = adjustments_dict.get('vignette_amount', 0)
+    if vignette_amount != 0:
+        logger.debug("Pipeline Step: Vignette...")
+        vignette_radius = adjustments_dict.get('vignette_radius', 70) / 100.0  # Convert from % to 0-1
+        vignette_feather = adjustments_dict.get('vignette_feather', 30) / 100.0  # Convert from % to 0-1
+        current_image = advanced_adjuster.apply_vignette(
+            current_image, vignette_amount,
+            radius=vignette_radius, feather=vignette_feather
+        )
+        if not check_img("Vignette"): return None
+        logger.debug("Pipeline Step: Vignette Done.")
 
     logger.debug("Adjustment pipeline finished.")
     return current_image

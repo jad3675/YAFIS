@@ -175,6 +175,8 @@ class AdjustmentPanel(QWidget):
     auto_level_requested = pyqtSignal(str, float)
     auto_color_requested = pyqtSignal(str)
     auto_tone_requested = pyqtSignal()
+    auto_contrast_requested = pyqtSignal()
+    auto_vibrance_requested = pyqtSignal()
     wb_picker_requested = pyqtSignal()
 
     def __init__(self, parent=None):
@@ -182,7 +184,8 @@ class AdjustmentPanel(QWidget):
         
         # Default adjustments
         self._default_adjustments = {
-            'brightness': 0, 'contrast': 0, 'saturation': 0, 'hue': 0, 'temp': 0, 'tint': 0,
+            'brightness': 0, 'contrast': 0, 'saturation': 0, 'vibrance': 0, 'hue': 0, 'temp': 0, 'tint': 0,
+            'clarity': 0,
             'levels_in_black': 0, 'levels_in_white': 255, 'levels_gamma': 1.0, 
             'levels_out_black': 0, 'levels_out_white': 255,
             'curves_rgb': [[0, 0], [255, 255]], 'curves_red': [[0, 0], [255, 255]], 
@@ -193,6 +196,7 @@ class AdjustmentPanel(QWidget):
             'mixer_blue_r': 0, 'mixer_blue_g': 0, 'mixer_blue_b': 100, 'mixer_blue_const': 0,
             'noise_reduction_strength': 0,
             'dust_removal_enabled': False, 'dust_removal_sensitivity': 50, 'dust_removal_radius': 3,
+            'vignette_amount': 0, 'vignette_radius': 70, 'vignette_feather': 30,
             'hsl_color': 'Reds',
             'hsl_reds_h': 0, 'hsl_reds_s': 0, 'hsl_reds_l': 0,
             'hsl_yellows_h': 0, 'hsl_yellows_s': 0, 'hsl_yellows_l': 0,
@@ -313,9 +317,9 @@ class AdjustmentPanel(QWidget):
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(8)
         
-        # Light section (Brightness, Contrast)
+        # Light section (Brightness, Contrast, Clarity)
         light_section = CollapsibleSection("Light")
-        light_section.set_reset_callback(lambda: self._reset_section(['brightness', 'contrast']))
+        light_section.set_reset_callback(lambda: self._reset_section(['brightness', 'contrast', 'clarity']))
         self._sections['light'] = light_section
         
         form = QFormLayout()
@@ -329,12 +333,16 @@ class AdjustmentPanel(QWidget):
             -100, 100, 0, "contrast", TOOLTIPS['contrast'])
         form.addRow("Contrast:", self._slider_with_label(self.contrast_slider, self.contrast_label))
         
+        self.clarity_slider, self.clarity_label = self._create_slider_row(
+            -100, 100, 0, "clarity", "Enhance local contrast and midtone detail. Positive adds punch, negative softens.")
+        form.addRow("Clarity:", self._slider_with_label(self.clarity_slider, self.clarity_label))
+        
         light_section.content_layout().addLayout(form)
         layout.addWidget(light_section)
         
-        # Color section (Saturation, Hue)
+        # Color section (Saturation, Vibrance, Hue)
         color_section = CollapsibleSection("Color")
-        color_section.set_reset_callback(lambda: self._reset_section(['saturation', 'hue']))
+        color_section.set_reset_callback(lambda: self._reset_section(['saturation', 'vibrance', 'hue']))
         self._sections['color_basic'] = color_section
         
         form = QFormLayout()
@@ -343,6 +351,10 @@ class AdjustmentPanel(QWidget):
         self.saturation_slider, self.saturation_label = self._create_slider_row(
             -100, 100, 0, "saturation", TOOLTIPS['saturation'])
         form.addRow("Saturation:", self._slider_with_label(self.saturation_slider, self.saturation_label))
+        
+        self.vibrance_slider, self.vibrance_label = self._create_slider_row(
+            -100, 100, 0, "vibrance", "Boost muted colors while protecting already-saturated areas")
+        form.addRow("Vibrance:", self._slider_with_label(self.vibrance_slider, self.vibrance_label))
         
         self.hue_slider, self.hue_label = self._create_slider_row(
             -180, 180, 0, "hue", TOOLTIPS['hue'])
@@ -416,6 +428,21 @@ class AdjustmentPanel(QWidget):
         auto_tone_layout.addWidget(self.auto_tone_btn)
         auto_tone_layout.addStretch()
         layout.addLayout(auto_tone_layout)
+        
+        # Auto Contrast and Auto Vibrance buttons
+        auto_enhance_layout = QHBoxLayout()
+        self.auto_contrast_btn = QPushButton("Auto Contrast")
+        self.auto_contrast_btn.setToolTip("Automatically optimize image contrast based on histogram analysis")
+        self.auto_contrast_btn.clicked.connect(self.auto_contrast_requested.emit)
+        auto_enhance_layout.addWidget(self.auto_contrast_btn)
+        
+        self.auto_vibrance_btn = QPushButton("Auto Vibrance")
+        self.auto_vibrance_btn.setToolTip("Automatically boost muted colors while protecting saturated areas")
+        self.auto_vibrance_btn.clicked.connect(self.auto_vibrance_requested.emit)
+        auto_enhance_layout.addWidget(self.auto_vibrance_btn)
+        
+        auto_enhance_layout.addStretch()
+        layout.addLayout(auto_enhance_layout)
         
         layout.addStretch()
         scroll.setWidget(content)
@@ -610,6 +637,31 @@ class AdjustmentPanel(QWidget):
         dust_section.content_layout().addLayout(dust_form)
         dust_section.set_expanded(False)
         layout.addWidget(dust_section)
+        
+        # Vignette section
+        vignette_section = CollapsibleSection("Vignette")
+        vignette_section.set_reset_callback(lambda: self._reset_section([
+            'vignette_amount', 'vignette_radius', 'vignette_feather']))
+        self._sections['vignette'] = vignette_section
+        
+        vignette_form = QFormLayout()
+        vignette_form.setSpacing(6)
+        
+        self.vignette_amount_slider, self.vignette_amount_label = self._create_slider_row(
+            -100, 100, 0, "vignette_amount", "Darken (positive) or lighten (negative) the edges")
+        vignette_form.addRow("Amount:", self._slider_with_label(self.vignette_amount_slider, self.vignette_amount_label))
+        
+        self.vignette_radius_slider, self.vignette_radius_label = self._create_slider_row(
+            10, 150, 70, "vignette_radius", "Size of the unaffected center area (% of image)")
+        vignette_form.addRow("Radius:", self._slider_with_label(self.vignette_radius_slider, self.vignette_radius_label))
+        
+        self.vignette_feather_slider, self.vignette_feather_label = self._create_slider_row(
+            5, 100, 30, "vignette_feather", "Softness of the transition from center to edge")
+        vignette_form.addRow("Feather:", self._slider_with_label(self.vignette_feather_slider, self.vignette_feather_label))
+        
+        vignette_section.content_layout().addLayout(vignette_form)
+        vignette_section.set_expanded(False)
+        layout.addWidget(vignette_section)
         
         layout.addStretch()
         scroll.setWidget(content)
@@ -988,6 +1040,15 @@ class AdjustmentPanel(QWidget):
         self._emit_change()
         self._update_all_indicators()
     
+    def _on_vignette_changed(self):
+        """Handle vignette settings change."""
+        self._push_undo()
+        self._current_adjustments['vignette_amount'] = self.vignette_amount_slider.value()
+        self._current_adjustments['vignette_radius'] = self.vignette_radius_slider.value()
+        self._current_adjustments['vignette_feather'] = self.vignette_feather_slider.value()
+        self._emit_change()
+        self._update_all_indicators()
+    
     def _on_hsl_changed(self):
         """Handle HSL value change."""
         self._push_undo()
@@ -1104,8 +1165,12 @@ class AdjustmentPanel(QWidget):
             self.brightness_label.setText(str(self._current_adjustments['brightness']))
             self.contrast_slider.setValue(self._current_adjustments['contrast'])
             self.contrast_label.setText(str(self._current_adjustments['contrast']))
+            self.clarity_slider.setValue(self._current_adjustments.get('clarity', 0))
+            self.clarity_label.setText(str(self._current_adjustments.get('clarity', 0)))
             self.saturation_slider.setValue(self._current_adjustments['saturation'])
             self.saturation_label.setText(str(self._current_adjustments['saturation']))
+            self.vibrance_slider.setValue(self._current_adjustments.get('vibrance', 0))
+            self.vibrance_label.setText(str(self._current_adjustments.get('vibrance', 0)))
             self.hue_slider.setValue(self._current_adjustments['hue'])
             self.hue_label.setText(str(self._current_adjustments['hue']))
             self.temp_slider.setValue(self._current_adjustments['temp'])
@@ -1140,6 +1205,14 @@ class AdjustmentPanel(QWidget):
             self.dust_radius_slider.setValue(self._current_adjustments.get('dust_removal_radius', 3))
             self.dust_radius_label.setText(str(self.dust_radius_slider.value()))
             
+            # Vignette
+            self.vignette_amount_slider.setValue(self._current_adjustments.get('vignette_amount', 0))
+            self.vignette_amount_label.setText(str(self.vignette_amount_slider.value()))
+            self.vignette_radius_slider.setValue(self._current_adjustments.get('vignette_radius', 70))
+            self.vignette_radius_label.setText(str(self.vignette_radius_slider.value()))
+            self.vignette_feather_slider.setValue(self._current_adjustments.get('vignette_feather', 30))
+            self.vignette_feather_label.setText(str(self.vignette_feather_slider.value()))
+            
             # Color tab - HSL
             self._update_hsl_display()
             
@@ -1153,12 +1226,14 @@ class AdjustmentPanel(QWidget):
     def _block_all_signals(self, block):
         """Block or unblock signals from all input widgets."""
         widgets = [
-            self.brightness_slider, self.contrast_slider, self.saturation_slider,
-            self.hue_slider, self.temp_slider, self.tint_slider,
+            self.brightness_slider, self.contrast_slider, self.clarity_slider,
+            self.saturation_slider, self.vibrance_slider, self.hue_slider, 
+            self.temp_slider, self.tint_slider,
             self.levels_in_black, self.levels_in_white, self.levels_gamma,
             self.levels_out_black, self.levels_out_white,
             self.mixer_r_slider, self.mixer_g_slider, self.mixer_b_slider, self.mixer_const_slider,
             self.nr_slider, self.dust_enabled, self.dust_sensitivity_slider, self.dust_radius_slider,
+            self.vignette_amount_slider, self.vignette_radius_slider, self.vignette_feather_slider,
             self.hsl_h_slider, self.hsl_s_slider, self.hsl_l_slider,
             self.sel_c_slider, self.sel_m_slider, self.sel_y_slider, self.sel_k_slider,
             self.sel_relative, self.curves_widget

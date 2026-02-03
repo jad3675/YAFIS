@@ -43,6 +43,7 @@ from ..services.conversion_service import ConversionService, PresetInfo
 from ..utils.history import HistoryStack
 from ..utils.keyboard_shortcuts import ShortcutManager, get_shortcut_manager
 from ..utils.session import SessionManager, get_session_manager
+from ..utils.contact_sheet import create_contact_sheet, save_contact_sheet
 
 
 from .workers import (ImageProcessingWorker, InitialConversionWorker, 
@@ -193,6 +194,8 @@ class MainWindow(QMainWindow, FileHandlingMixin, BatchProcessingMixin, ViewManag
         self.adjustment_panel.auto_level_requested.connect(self.handle_auto_level)
         self.adjustment_panel.auto_color_requested.connect(self.handle_auto_color)
         self.adjustment_panel.auto_tone_requested.connect(self.handle_auto_tone)
+        self.adjustment_panel.auto_contrast_requested.connect(self.handle_auto_contrast)
+        self.adjustment_panel.auto_vibrance_requested.connect(self.handle_auto_vibrance)
         self.film_preset_panel.preview_requested.connect(self.handle_preset_preview)
         self.film_preset_panel.apply_requested.connect(self.handle_preset_apply)
         self.photo_preset_panel.preview_requested.connect(self.handle_preset_preview)
@@ -421,6 +424,84 @@ class MainWindow(QMainWindow, FileHandlingMixin, BatchProcessingMixin, ViewManag
         self.statusBar().showMessage(error_message, 5000)
         self.update_ui_state()
 
+    @pyqtSlot()
+    def handle_auto_contrast(self):
+        """Handle Auto Contrast request."""
+        if self.base_image is None:
+            self.statusBar().showMessage("Load and convert an image first", 3000)
+            return
+        if self._is_converting_initial or self._request_pending:
+            self.statusBar().showMessage("Busy—please wait…", 2000)
+            return
+
+        # Store state before auto adjustment
+        self._store_state_for_undo("Auto Contrast")
+        
+        try:
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            self.statusBar().showMessage("Calculating Auto Contrast…", 0)
+            
+            # Calculate auto contrast params
+            contrast_params = AdvancedAdjustments.calculate_auto_contrast_params(self.base_image)
+            
+            # Update adjustment panel
+            try:
+                self.adjustment_panel.adjustment_changed.disconnect(self.handle_adjustment_change)
+            except TypeError:
+                pass
+            
+            self.adjustment_panel.set_adjustments(contrast_params)
+            self.adjustment_panel.adjustment_changed.connect(self.handle_adjustment_change)
+            
+            # Trigger processing
+            self.handle_adjustment_change(self.adjustment_panel._current_adjustments)
+            self.statusBar().showMessage(f"Auto Contrast applied: {contrast_params.get('contrast', 0)}", 3000)
+            
+        except Exception as e:
+            logger.exception("Auto Contrast failed")
+            self.statusBar().showMessage(f"Auto Contrast failed: {e}", 5000)
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    @pyqtSlot()
+    def handle_auto_vibrance(self):
+        """Handle Auto Vibrance request."""
+        if self.base_image is None:
+            self.statusBar().showMessage("Load and convert an image first", 3000)
+            return
+        if self._is_converting_initial or self._request_pending:
+            self.statusBar().showMessage("Busy—please wait…", 2000)
+            return
+
+        # Store state before auto adjustment
+        self._store_state_for_undo("Auto Vibrance")
+        
+        try:
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            self.statusBar().showMessage("Calculating Auto Vibrance…", 0)
+            
+            # Calculate auto vibrance params
+            vibrance_params = AdvancedAdjustments.calculate_auto_vibrance_params(self.base_image)
+            
+            # Update adjustment panel
+            try:
+                self.adjustment_panel.adjustment_changed.disconnect(self.handle_adjustment_change)
+            except TypeError:
+                pass
+            
+            self.adjustment_panel.set_adjustments(vibrance_params)
+            self.adjustment_panel.adjustment_changed.connect(self.handle_adjustment_change)
+            
+            # Trigger processing
+            self.handle_adjustment_change(self.adjustment_panel._current_adjustments)
+            self.statusBar().showMessage(f"Auto Vibrance applied: {vibrance_params.get('vibrance', 0)}", 3000)
+            
+        except Exception as e:
+            logger.exception("Auto Vibrance failed")
+            self.statusBar().showMessage(f"Auto Vibrance failed: {e}", 5000)
+        finally:
+            QApplication.restoreOverrideCursor()
+
     def create_actions(self):
         """Create QAction objects for menus and toolbars."""
         self.open_action = QAction("&Open Negative...", self, statusTip="Open a film negative image file", shortcut=QKeySequence.StandardKey.Open, triggered=self.open_image)
@@ -439,6 +520,7 @@ class MainWindow(QMainWindow, FileHandlingMixin, BatchProcessingMixin, ViewManag
         self.color_sampler_action = QAction("Color &Sampler...", self, statusTip="Sample colors from the image", shortcut="S", triggered=self.show_color_sampler_dialog, enabled=False)
         self.spot_removal_action = QAction("S&pot Removal...", self, statusTip="Manually paint and remove dust spots", shortcut="P", triggered=self.show_spot_removal_dialog, enabled=False)
         self.split_view_action = QAction("Split &View Comparison...", self, statusTip="Compare different adjustment states side by side", shortcut="\\", triggered=self.show_split_view, enabled=False)
+        self.contact_sheet_action = QAction("Generate &Contact Sheet...", self, statusTip="Create a contact sheet from filmstrip images", triggered=self.generate_contact_sheet, enabled=False)
 
         self.view_adjust_action = self.adjustment_dock.toggleViewAction()
         self.view_adjust_action.setText("Adjustment Panel")
@@ -488,6 +570,8 @@ class MainWindow(QMainWindow, FileHandlingMixin, BatchProcessingMixin, ViewManag
         tools_menu.addAction(self.spot_removal_action)
         tools_menu.addSeparator()
         tools_menu.addAction(self.split_view_action)
+        tools_menu.addSeparator()
+        tools_menu.addAction(self.contact_sheet_action)
 
         view_menu = menu_bar.addMenu("&View")
         view_menu.addAction(self.view_adjust_action)
@@ -760,6 +844,10 @@ class MainWindow(QMainWindow, FileHandlingMixin, BatchProcessingMixin, ViewManag
         self.color_sampler_action.setEnabled(image_loaded and not is_processing)
         self.spot_removal_action.setEnabled(image_loaded and not is_processing)
         self.split_view_action.setEnabled(image_loaded and not is_processing)
+        
+        # Contact sheet - enabled when filmstrip has items
+        has_batch_items = self.filmstrip_widget.list_widget.count() > 0
+        self.contact_sheet_action.setEnabled(has_batch_items and not is_processing)
         
         # Image info action - enabled when any image is loaded (even during processing)
         has_any_image = self.raw_loaded_image is not None or self.base_image is not None
@@ -1481,6 +1569,90 @@ class MainWindow(QMainWindow, FileHandlingMixin, BatchProcessingMixin, ViewManag
                 self.histogram_widget.update_histogram(self.base_image)
                 self.statusBar().showMessage("Spot removal applied.", 3000)
                 self.update_ui_state()
+
+    def generate_contact_sheet(self):
+        """Generate a contact sheet from filmstrip images."""
+        # Get all image paths from filmstrip
+        image_paths = []
+        for i in range(self.filmstrip_widget.list_widget.count()):
+            item = self.filmstrip_widget.list_widget.item(i)
+            if item:
+                path = item.data(Qt.ItemDataRole.UserRole)
+                if path:
+                    image_paths.append(path)
+        
+        if not image_paths:
+            QMessageBox.warning(self, "No Images", "No images in the filmstrip to create a contact sheet.")
+            return
+        
+        # Ask for save location
+        output_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Contact Sheet",
+            "contact_sheet.jpg",
+            "JPEG Files (*.jpg *.jpeg);;PNG Files (*.png);;All Files (*)"
+        )
+        
+        if not output_path:
+            return
+        
+        try:
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            self.statusBar().showMessage("Generating contact sheet...", 0)
+            
+            # Load images and get filenames
+            images = []
+            filenames = []
+            
+            for path in image_paths:
+                try:
+                    result = image_loader.load_image(path)
+                    # load_image returns (image_np, original_mode, file_size) tuple
+                    if result[0] is not None:
+                        img = result[0]
+                        # Convert to RGB if needed
+                        if len(img.shape) == 2:
+                            img = np.stack([img] * 3, axis=-1)
+                        elif img.shape[2] == 4:
+                            img = img[:, :, :3]
+                        
+                        # Ensure uint8
+                        if img.dtype != np.uint8:
+                            if img.max() <= 1.0:
+                                img = (img * 255).astype(np.uint8)
+                            else:
+                                img = img.astype(np.uint8)
+                        
+                        images.append(img)
+                        filenames.append(os.path.basename(path))
+                except Exception as e:
+                    logger.warning("Failed to load image for contact sheet: %s - %s", path, e)
+            
+            if not images:
+                QMessageBox.warning(self, "Error", "Could not load any images for the contact sheet.")
+                return
+            
+            # Create contact sheet
+            sheet = create_contact_sheet(
+                images=images,
+                filenames=filenames,
+                columns=4,
+                thumb_size=(300, 200),
+                title=f"Contact Sheet - {len(images)} images"
+            )
+            
+            # Save contact sheet
+            if save_contact_sheet(sheet, output_path):
+                self.statusBar().showMessage(f"Contact sheet saved: {output_path}", 5000)
+                QMessageBox.information(self, "Success", f"Contact sheet saved to:\n{output_path}")
+            else:
+                QMessageBox.warning(self, "Error", "Failed to save contact sheet.")
+                
+        except Exception as e:
+            logger.exception("Failed to generate contact sheet")
+            QMessageBox.critical(self, "Error", f"Failed to generate contact sheet:\n{str(e)}")
+        finally:
+            QApplication.restoreOverrideCursor()
 
 
 # (entrypoint moved to [`negative_converter.main.main()`](negative_converter/main.py:22))
